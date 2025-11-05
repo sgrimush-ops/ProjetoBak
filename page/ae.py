@@ -1,27 +1,29 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Tuple
 import os
+import re # Para limpar o número de telefone
 
 # --- Configurações Iniciais ---
 FILE_PATH = 'data/WMS.xlsm'
-# IMPORTANTE: Mantenha o nome exato das colunas da sua planilha
-COLUNA_DESCRICAO = 'Descrição' 
-COLUNA_CODIGO = 'codigo'
-COLUNA_QTD = 'Qtd'
+COLUNA_DESCRICAO = 'Descrição' # <-- AJUSTE AQUI se o nome da coluna for diferente
+COLUNA_CODIGO = 'codigo'        # <-- AJUSTE AQUI se o nome da coluna for diferente
 
 # Lista de meses para o seletor
 MESES_DISPONIVEIS = {
-    #"Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4, "Maio": 5, "Junho": 6,"Julho": 7, "Agosto": 8, "Setembro": 9,
-      "Outubro": 10, "Novembro": 11, "Dezembro": 12
+    "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4, "Maio": 5, "Junho": 6,
+    "Julho": 7, "Agosto": 8, "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
 }
+# Mapeamento inverso para encontrar o nome do mês a partir do número
+MESES_INVERSO = {v: k for k, v in MESES_DISPONIVEIS.items()}
+
 
 # --- Funções de Carregamento e Pré-Processamento ---
 
 @st.cache_data
 def load_data(file_path: str) -> Optional[pd.DataFrame]:
-    """Carrega dados do arquivo Excel especificado."""
+    """Carrega dados do arquivo Excel (sem quebra de cache por simplificação de análise)."""
     try:
         # Use a aba correta (assumindo 'WMS' como no código anterior)
         return pd.read_excel(file_path, sheet_name='WMS')
@@ -34,33 +36,24 @@ def preprocess_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     df = df.copy()
     
     # 1. Checa colunas essenciais
-    if 'datasalva' not in df.columns or COLUNA_QTD not in df.columns or COLUNA_CODIGO not in df.columns or COLUNA_DESCRICAO not in df.columns:
-        st.error(f"Colunas essenciais (datasalva, {COLUNA_QTD}, {COLUNA_CODIGO}, {COLUNA_DESCRICAO}) não encontradas.")
+    if 'datasalva' not in df.columns or 'Qtd' not in df.columns:
+        st.error("Colunas 'datasalva' e/ou 'Qtd' não encontradas.")
         return None
 
-    # 2. Converte datas e limpa
+    # 2. Converte datas
     df['datasalva'] = pd.to_datetime(df['datasalva'], errors='coerce')
-    df.dropna(subset=['datasalva', COLUNA_QTD], inplace=True) 
+    df.dropna(subset=['datasalva', 'Qtd'], inplace=True)
     df['Data_Dia'] = df['datasalva'].dt.date
     
-    # 3. Garante que 'Qtd' e 'codigo' são numéricas
-    df[COLUNA_QTD] = pd.to_numeric(df[COLUNA_QTD], errors='coerce')
-    df[COLUNA_CODIGO] = df[COLUNA_CODIGO].fillna(0).astype(int)
+    # 3. Garante que 'Qtd' é numérica
+    df['Qtd'] = pd.to_numeric(df['Qtd'], errors='coerce')
     
     return df
 
 # --- Função Principal de Análise ---
 
-# RENOMEADA para show_ae_page() para o sistema de navegação (app.py)
 def show_ae_page():
     st.title("📈 Evolução de Estoque Mensal")
-
-    # Garante que a importação do Optional e Tuple foi feita no topo
-    try:
-        if 'Optional' not in globals() and 'Tuple' not in globals():
-             from typing import Optional, Tuple
-    except ImportError:
-        pass # Ignora, pois pode já ter sido importado
 
     df_raw = load_data(FILE_PATH)
     if df_raw is None:
@@ -70,23 +63,51 @@ def show_ae_page():
     if df_processed is None:
         return
 
+    # --- LÓGICA DE DATA PADRÃO ---
+    hoje = datetime.now()
+    ano_atual = hoje.year
+    mes_atual_num = hoje.month
+    
+    # Encontra o nome do mês atual (ex: "Novembro")
+    mes_atual_nome = MESES_INVERSO.get(mes_atual_num, "Janeiro")
+    
     # Extrai anos únicos para o seletor
     anos_disponiveis = sorted(df_processed['datasalva'].dt.year.unique(), reverse=True)
+    if ano_atual not in anos_disponiveis:
+        anos_disponiveis.insert(0, ano_atual) # Garante que o ano atual esteja na lista
+
+    # Encontra o índice (posição) do ano e mês atuais para usar como padrão
+    try:
+        index_ano = anos_disponiveis.index(ano_atual)
+    except ValueError:
+        index_ano = 0 # Padrão é o primeiro da lista se o ano atual não for encontrado
+        
+    lista_meses_nomes = list(MESES_DISPONIVEIS.keys())
+    try:
+        index_mes = lista_meses_nomes.index(mes_atual_nome)
+    except ValueError:
+        index_mes = 0 # Padrão é Janeiro
+    # --- FIM DA LÓGICA DE DATA PADRÃO ---
+
     
-    # --- ENTRADAS DE FILTRAGEM DE DATA ---
+    # --- ENTRADAS DO USUÁRIO ---
+    st.subheader("Selecione o Período")
     col1, col2 = st.columns(2)
     
     with col1:
-        ano_selecionado = st.selectbox("Selecione o Ano", anos_disponiveis)
+        # Define o índice padrão para o ano atual
+        ano_selecionado = st.selectbox(
+            "Selecione o Ano", 
+            anos_disponiveis, 
+            index=index_ano
+        )
     with col2:
-        # Pega a lista de meses para o seletor
-        meses_disponiveis_filtrados = [
-            m for m, n in MESES_DISPONIVEIS.items() if n in df_processed[df_processed['datasalva'].dt.year == ano_selecionado]['datasalva'].dt.month.unique()
-        ]
-        if not meses_disponiveis_filtrados:
-             meses_disponiveis_filtrados = list(MESES_DISPONIVEIS.keys())
-
-        mes_selecionado = st.selectbox("Selecione o Mês", meses_disponiveis_filtrados)
+        # Define o índice padrão para o mês atual
+        mes_selecionado = st.selectbox(
+            "Selecione o Mês", 
+            lista_meses_nomes, 
+            index=index_mes
+        )
     
     mes_num = MESES_DISPONIVEIS[mes_selecionado]
 
@@ -101,97 +122,84 @@ def show_ae_page():
         return
 
     st.markdown("---")
-    
-    # --- FILTRO POR PRODUTO ESPECÍFICO (Autocomplete/Código) ---
+
+    # --- FILTRO POR PRODUTO ESPECÍFICO ---
     st.subheader("Filtro por Produto")
     
-    col_busca_desc, col_busca_cod = st.columns(2)
-
-    with col_busca_desc:
-        termo_busca = st.text_input("Digite a descrição ou parte dela:")
-
-    with col_busca_cod:
-        codigo_direto = st.text_input("Ou digite o Código (apenas números):")
-
-    item_selecionado_code = None
+    tab1, tab2 = st.tabs(["Buscar por Descrição", "Buscar por Código"])
     
-    if codigo_direto and codigo_direto.isdigit():
-        # 1. Busca direta pelo código
-        item_selecionado_code = int(codigo_direto)
-        termo_busca = None
-        
-    elif termo_busca:
-        # 2. Busca pela descrição (Autocomplete)
-        
-        # Cria uma coluna temporária para busca sem case sensitive
-        df_mensal[f'{COLUNA_DESCRICAO}_Lower'] = df_mensal[COLUNA_DESCRICAO].astype(str).str.lower()
-        termo_lower = termo_busca.lower()
-        
-        # Filtra
-        mask = df_mensal[f'{COLUNA_DESCRICAO}_Lower'].str.contains(termo_lower, na=False)
-        resultados_parciais = df_mensal[mask].sort_values(by=COLUNA_DESCRICAO, ascending=True)
+    codigo_para_filtrar = None
 
-        # Remove duplicatas para o dropdown
-        opcoes_unicas = resultados_parciais.drop_duplicates(subset=[COLUNA_CODIGO])
+    # ABA 1: Busca por Descrição (Autocomplete)
+    with tab1:
+        # Cria a coluna "display" para o selectbox
+        df_mensal[COLUNA_DESCRICAO] = df_mensal[COLUNA_DESCRICAO].astype(str)
+        df_mensal[COLUNA_CODIGO] = df_mensal[COLUNA_CODIGO].astype(str).str.split('.').str[0]
         
-        # Cria a lista de strings formatadas
-        lista_opcoes = opcoes_unicas.apply(
-            lambda row: f"{row[COLUNA_DESCRICAO]} (Código: {row[COLUNA_CODIGO]})", 
-            axis=1
-        ).tolist()
+        df_mensal['Display'] = df_mensal[COLUNA_DESCRICAO] + " (Código: " + df_mensal[COLUNA_CODIGO] + ")"
         
-        if lista_opcoes:
-            escolha = st.selectbox(
-                "Selecione o produto na lista:",
-                options=[''] + lista_opcoes,
-                index=0
-            )
-            
-            if escolha:
-                try:
-                    code_str = escolha.split('(Código: ')[1].strip(')')
-                    item_selecionado_code = int(float(code_str)) # Conversão segura
-                except:
-                    st.error("Erro ao processar o código selecionado.") 
-                    pass 
+        # Filtro de texto
+        descricao_busca = st.text_input("Digite a descrição ou parte dela:")
+        
+        if descricao_busca:
+            # Filtra o dataframe com base na busca
+            resultados_parciais = df_mensal[df_mensal[COLUNA_DESCRICAO].str.contains(descricao_busca, case=False, na=False)]
+            opcoes_unicas = resultados_parciais.drop_duplicates(subset=[COLUNA_CODIGO])
+            lista_opcoes = ["Selecione um item..."] + opcoes_unicas['Display'].tolist()
         else:
-            st.warning("Nenhum produto encontrado com o termo digitado no mês selecionado.")
+            lista_opcoes = ["Digite algo para buscar..."]
 
-    
-    # --- FILTRAGEM E EXIBIÇÃO DO GRÁFICO ---
-    
-    if item_selecionado_code:
-        # Filtra o dataframe para o item específico
-        df_final = df_mensal[df_mensal[COLUNA_CODIGO] == item_selecionado_code]
+        item_selecionado_display = st.selectbox("Selecione o produto na lista:", lista_opcoes)
         
-        if df_final.empty:
-            st.warning(f"Nenhum item com código {item_selecionado_code} encontrado no mês.")
-            return
+        if item_selecionado_display and item_selecionado_display != "Selecione um item..." and item_selecionado_display != "Digite algo para buscar...":
+            # Extrai o código do texto (ex: "Produto (Código: 123)")
+            try:
+                codigo_para_filtrar = int(re.search(r'\(Código: (\d+)\)', item_selecionado_display).group(1))
+            except (AttributeError, ValueError):
+                st.error("Não foi possível extrair o código do item selecionado.")
 
-        # Agrupa e soma a quantidade do item específico
-        estoque_dia = df_final.groupby('Data_Dia')[COLUNA_QTD].sum().reset_index()
-        estoque_dia.columns = ['Data', 'Estoque Item']
+    # ABA 2: Busca por Código Direto
+    with tab2:
+        codigo_busca_direta = st.text_input("Ou digite o Código (apenas números):")
+        if codigo_busca_direta:
+            try:
+                codigo_para_filtrar = int(codigo_busca_direta)
+            except ValueError:
+                st.warning("Código deve conter apenas números.")
+
+    st.markdown("---")
+    
+    # --- ANÁLISE E EXIBIÇÃO DO GRÁFICO ---
+    
+    if codigo_para_filtrar:
+        # Filtra pelo produto específico
+        df_item = df_mensal[df_mensal[COLUNA_CODIGO].astype(int) == codigo_para_filtrar]
         
-        # Exibe o título
-        descricao = df_final[COLUNA_DESCRICAO].iloc[0]
-        st.subheader(f"Evolução do Item: {descricao} ({item_selecionado_code})")
-        
-        # Exibe o gráfico do item específico
-        st.line_chart(
-            estoque_dia,
-            x='Data',
-            y='Estoque Item',
-            use_container_width=True
-        )
-        st.dataframe(estoque_dia.tail())
-        
+        if df_item.empty:
+            st.warning(f"Nenhum produto encontrado com o código {codigo_para_filtrar} no mês selecionado.")
+        else:
+            # Agrupa e soma a quantidade para o produto específico
+            estoque_item_dia = df_item.groupby('Data_Dia')['Qtd'].sum().reset_index()
+            estoque_item_dia.columns = ['Data', 'Estoque Item']
+            
+            # Exibe a descrição do produto
+            descricao = df_item[COLUNA_DESCRICAO].iloc[0]
+            st.subheader(f"Evolução: {descricao}")
+            
+            st.line_chart(
+                estoque_item_dia,
+                x='Data',
+                y='Estoque Item',
+                use_container_width=True
+            )
+            # st.dataframe(estoque_item_dia.tail()) # Opcional: mostrar tabela
+    
     else:
-        # Se nenhum código foi selecionado, mostra o estoque TOTAL do mês
-        
+        # Se nenhum filtro for aplicado, mostra o estoque total
         st.subheader(f"Estoque Total - {mes_selecionado}/{ano_selecionado}")
         
         # Agrupa por dia e soma a quantidade total
-        estoque_total_dia = df_mensal.groupby('Data_Dia')[COLUNA_QTD].sum().reset_index()
+        estoque_total_dia = df_mensal.groupby('Data_Dia')['Qtd'].sum().reset_index()
         estoque_total_dia.columns = ['Data', 'Estoque Total']
 
         # Mostra o gráfico da evolução total
@@ -201,4 +209,3 @@ def show_ae_page():
             y='Estoque Total',
             use_container_width=True
         )
-        st.dataframe(estoque_total_dia.tail())
