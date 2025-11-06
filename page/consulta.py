@@ -7,7 +7,7 @@ import os
 # --- Configurações e Path ---
 FILE_PATH = 'data/WMS.xlsm'
 # IMPORTANTE: Coloque o nome EXATO da sua coluna de Descrição.
-COLUNA_DESCRICAO = 'Descrição' 
+COLUNA_DESCRICAO = 'Produto' 
 COLUNA_ENDERECO = 'Endereço'
 
 
