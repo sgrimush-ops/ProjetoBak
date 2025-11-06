@@ -4,22 +4,30 @@ import pandas as pd
 import hashlib
 from datetime import datetime, timedelta
 
-# Importa as páginas existentes
+# Importa as páginas
+from page.home import show_home_page
 from page.consulta import show_consulta_page
 from page.ae import show_ae_page
 from page.status import show_status_page
 from page.admin_maint import show_admin_page
-from page.home import show_home_page # <-- NOVA IMPORTAÇÃO
+from page.historico import show_historico_page # <-- 1. ATUALIZAÇÃO: Nova importação
 
 # Defina o caminho do seu banco de dados
 DB_PATH = 'data/database.db'
 
+# --- LISTA DE ADMINISTRADORES ---
+# Adicione aqui os nomes de usuário que devem ter acesso de admin
+ADMIN_USERS = ["admin", "rafael"]
+# --- FIM DA LISTA ---
+
 # --- Mapeamento de Páginas ---
 PAGES = {
-    "Home": show_home_page, # <-- NOVA PÁGINA
+    # Define a Home como a primeira página
+    "Home": show_home_page,
     "Consulta de Estoque": show_consulta_page,
-    "Análise de Evolução": show_ae_page
-    # Páginas de Admin são adicionadas dinamicamente
+    "Análise de Evolução": show_ae_page,
+    "Histórico de Solicitações": show_historico_page # <-- 2. ATUALIZAÇÃO: Nova página
+    # As páginas de Admin são adicionadas dinamicamente abaixo
 }
 
 # A configuração da página deve ser a primeira chamada do Streamlit
@@ -38,7 +46,7 @@ def check_hashes(password, hashed_text):
 # --- Funções de Banco de Dados (Rastreamento e Login) ---
 
 def create_user_table_if_not_exists():
-    """Cria a tabela 'users' se não existir (tabela de pendentes removida)."""
+    """Cria a tabela de usuários com colunas de rastreamento se não existirem."""
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10) # <-- TIMEOUT
@@ -53,7 +61,9 @@ def create_user_table_if_not_exists():
                 status_logado TEXT
             )
         ''')
-                
+        
+        # Remove a lógica de 'pending_requests'
+        
         # Tenta adicionar as colunas de rastreamento (ignora se já existirem)
         try:
             c.execute("ALTER TABLE users ADD COLUMN ultimo_acesso TIMESTAMP")
@@ -63,20 +73,18 @@ def create_user_table_if_not_exists():
             
         conn.commit()
     except sqlite3.Error as e:
-        st.error(f"Erro ao criar/atualizar tabelas do DB: {e}")
+        st.error(f"Erro ao criar/atualizar tabela de usuários: {e}")
     finally:
         if conn:
             conn.close()
 
 def update_user_status(username, status):
-    """Atualiza o status de login e o timestamp de acesso do usuário (APENAS no Login/Logout)."""
+    """Atualiza o status de login e o timestamp de acesso do usuário."""
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10) # <-- TIMEOUT
         c = conn.cursor()
-        
-        # Garante que o formato %m (mês) está correto.
-        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S') 
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         c.execute(
             "UPDATE users SET ultimo_acesso = ?, status_logado = ? WHERE username = ?",
@@ -84,7 +92,7 @@ def update_user_status(username, status):
         )
         conn.commit()
     except sqlite3.Error as e:
-        # Não mostra erro na tela principal, apenas no log (para não poluir)
+        # Evita mostrar erros de DB para o usuário final, mas loga no console do admin
         print(f"Erro ao atualizar status do usuário no DB: {e}")
     finally:
         if conn:
@@ -103,7 +111,6 @@ def check_login(username, password):
             hashed_password_from_db = data[0][0]
             return check_hashes(password, hashed_password_from_db)
         
-        # Retorna False se o usuário não for encontrado
         return False
         
     except sqlite3.Error as e:
@@ -118,18 +125,17 @@ def check_login(username, password):
 def main():
     """Função principal da aplicação."""
     
-    # GARANTE que as tabelas existem antes de qualquer operação
+    # GARANTE que a tabela está pronta para rastrear o status
     create_user_table_if_not_exists()
     
     # Inicializa o estado da sessão
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
         st.session_state['username'] = ''
-        st.session_state['current_page'] = 'Home' # <-- PÁGINA PADRÃO ALTERADA
+        st.session_state['current_page'] = 'Home' # Página padrão
 
-    # 1. Se o usuário NÃO ESTIVER logado, mostra a tela de login simplificada
+    # 1. Se o usuário NÃO ESTIVER logado, mostra a tela de login
     if not st.session_state['logged_in']:
-        
         st.title("Sistema de Consulta de Produtos")
         st.subheader("Área de Login")
         username = st.text_input("Nome de Usuário")
@@ -139,15 +145,13 @@ def main():
             if check_login(username, password):
                 st.session_state['logged_in'] = True
                 st.session_state['username'] = username
-                st.session_state['current_page'] = 'Home' # <-- Garante que vá para a Home
-                update_user_status(username, 'LOGADO') # <-- ATUALIZA STATUS
+                update_user_status(username, 'LOGADO') # <-- ATUALIZA STATUS NO LOGIN
                 st.rerun()
             else:
                 st.warning("Nome de usuário ou senha incorretos.")
         
         st.markdown("---")
-        # Mensagem para novos usuários, conforme solicitado
-        st.info("Para novos usuários ou recuperação de senha, contate o Administrador do sistema.")
+        st.info("Para novos usuários ou problemas de senha, contate o Administrador do sistema.")
                 
         return
 
@@ -155,57 +159,50 @@ def main():
     st.sidebar.success(f"Logado como: {st.session_state['username']}")
     
     if st.sidebar.button("Logout"):
-        update_user_status(st.session_state['username'], 'DESLOGADO') # <-- ATUALIZA STATUS
+        update_user_status(st.session_state['username'], 'DESLOGADO') # <-- ATUALIZA STATUS NO LOGOUT
         st.session_state['logged_in'] = False
         st.session_state['username'] = ''
-        st.session_state['current_page'] = 'Home' # <-- Reseta para a Home
+        st.session_state['current_page'] = 'Home'
         st.rerun()
 
     # --- LÓGICA DE NAVEGAÇÃO CONDICIONAL ---
-    # Começa com as páginas base
     paginas_a_exibir = list(PAGES.keys())
     
-    # Adiciona as páginas de Admin apenas se o usuário for 'admin'
-    if st.session_state['username'] == "admin":
-        
-        # Adiciona "Status do Usuário" se for admin
+    # Adiciona as páginas de Admin apenas se o usuário estiver na lista ADMIN_USERS
+    if st.session_state['username'] in ADMIN_USERS: # <-- Verifica a lista de admins
+        # Adiciona as páginas de Admin ao dicionário e à lista
         PAGES["Status do Usuário"] = show_status_page
+        PAGES["Administração"] = show_admin_page
         if "Status do Usuário" not in paginas_a_exibir:
             paginas_a_exibir.append("Status do Usuário")
-
-        # Adiciona "Administração" se for admin
-        PAGES["Administração"] = show_admin_page
         if "Administração" not in paginas_a_exibir:
             paginas_a_exibir.append("Administração")
             
-    # Remove as páginas de admin se o usuário não for admin
-    else:
-         if "Status do Usuário" in paginas_a_exibir:
-            paginas_a_exibir.remove("Status do Usuário")
-         if "Administração" in paginas_a_exibir:
-            paginas_a_exibir.remove("Administração")
-
-    # Garante que a página padrão seja segura caso o usuário mude
-    default_page_index = 0
-    if st.session_state['current_page'] in paginas_a_exibir:
-        default_page_index = paginas_a_exibir.index(st.session_state['current_page'])
-    else:
-        # Se a página atual não estiver disponível (ex: admin fez logout), vai para a Home
-        st.session_state['current_page'] = 'Home'
-        default_page_index = 0
+    # Remove a página de Admin da lista se o usuário não for admin
+    elif "Administração" in paginas_a_exibir:
+         paginas_a_exibir.remove("Administração")
+    elif "Status do Usuário" in paginas_a_exibir:
+         paginas_a_exibir.remove("Status do Usuário")
+    # --- FIM DA ALTERAÇÃO ---
 
     # Seletor de Página na Sidebar
+    
+    # Garante que a página atual seja válida
+    if st.session_state['current_page'] not in paginas_a_exibir:
+        st.session_state['current_page'] = "Home"
+        
     selected_page = st.sidebar.radio(
         "Selecione a Página:",
         paginas_a_exibir, # <-- Usa a lista filtrada
-        index=default_page_index
+        index=paginas_a_exibir.index(st.session_state['current_page'])
     )
     
     # Atualiza o estado e executa a função da página
     st.session_state['current_page'] = selected_page
-    PAGES[st.session_state['current_page']]()
+    PAGES[st.session_state['current_page']]() # <-- 3. ATUALIZAÇÃO: Linha adicionada
 
 # --- Ponto de Entrada da Aplicação ---
 
 if __name__ == "__main__":
     main()
+    
