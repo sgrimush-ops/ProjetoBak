@@ -7,7 +7,7 @@ import re # Para limpar o número de telefone
 
 # --- Configurações Iniciais ---
 FILE_PATH = 'data/WMS.xlsm'
-COLUNA_DESCRICAO = 'Produto'
+COLUNA_DESCRICAO = 'Produto' 
 COLUNA_CODIGO = 'codigo'
 
 # Lista de meses para o seletor
@@ -208,5 +208,4 @@ def show_ae_page():
             x='Data',
             y='Estoque Total',
             use_container_width=True
-
         )
