@@ -5,7 +5,6 @@ from datetime import datetime
 
 # Defina o caminho do seu banco de dados
 DB_PATH = 'data/database.db'
-# FILE_PATH foi removido pois não é mais necessário para KPIs
 
 # --- Funções de KPI ---
 # Usamos cache para que os números carreguem rápido
@@ -33,14 +32,12 @@ def show_home_page():
     # 1. Título e Boas-Vindas
     st.title(f"Bem-vindo(a), {st.session_state.get('username', 'Usuário')}!")
     st.markdown("Este é o painel de controle do Sistema de Gestão de Estoque (WMS).")
-    st.markdown("Estoque CD atualizado de seg a sab as 8:30hs, pedidos atualizados durante a tarde.")    
     st.markdown("---")
 
     # 2. KPIs (Métricas Principais)
     st.subheader("Resumo do Sistema")
     
-    # KPI de Itens Movimentados foi removido.
-    # Exibe apenas o total de usuários, sem usar colunas.
+    # Exibe apenas o total de usuários
     st.metric(label="Total de Usuários Cadastrados", value=get_kpi_users())
         
     st.markdown("---")
@@ -49,11 +46,21 @@ def show_home_page():
     st.subheader("Acesso Rápido")
     st.markdown("Selecione uma das opções abaixo para navegar:")
 
-    col1_nav, col2_nav = st.columns(2)
+    # --- ALTERAÇÃO AQUI ---
+    
+    # Verifica se o usuário tem acesso a lojas (para ver o botão "Digitar Pedidos")
+    lojas_do_usuario = st.session_state.get('lojas_acesso', [])
+    
+    if lojas_do_usuario:
+        # Se tem acesso a lojas, mostra 3 colunas
+        col1_nav, col2_nav, col3_nav = st.columns(3)
+    else:
+        # Se não, mostra 2 colunas
+        col1_nav, col2_nav = st.columns(2)
 
     with col1_nav:
         # Botão para ir para a Consulta
-        if st.button("🔎 Consultar Estoque", use_container_width=True, type="primary"):
+        if st.button("🔎 Consultar Estoque", use_container_width=True):
             st.session_state['current_page'] = "Consulta de Estoque"
             st.rerun()
 
@@ -62,4 +69,13 @@ def show_home_page():
         if st.button("📈 Ver Análise de Evolução", use_container_width=True):
             st.session_state['current_page'] = "Análise de Evolução"
             st.rerun()
+            
+    # Adiciona a terceira coluna apenas se o usuário tiver acesso
+    if lojas_do_usuario:
+        with col3_nav:
+            # Botão principal (type="primary") para Digitar Pedidos
+            if st.button("🛒 Digitar Pedidos", use_container_width=True, type="primary"):
+                st.session_state['current_page'] = "Digitar Pedidos"
+                st.rerun()
+    # --- FIM DA ALTERAÇÃO ---
 
