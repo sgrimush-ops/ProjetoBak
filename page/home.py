@@ -33,6 +33,7 @@ def show_home_page():
     # 1. Título e Boas-Vindas
     st.title(f"Bem-vindo(a), {st.session_state.get('username', 'Usuário')}!")
     st.markdown("Este é o painel de controle do Sistema de Gestão de Estoque (WMS).")
+    st.markdown("Estoque CD atualizado de seg a sab as 8:30hs, pedidos atualizados durante a tarde.")    
     st.markdown("---")
 
     # 2. KPIs (Métricas Principais)
@@ -61,3 +62,4 @@ def show_home_page():
         if st.button("📈 Ver Análise de Evolução", use_container_width=True):
             st.session_state['current_page'] = "Análise de Evolução"
             st.rerun()
+
