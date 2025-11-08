@@ -10,7 +10,7 @@ LISTA_LOJAS = ["001", "002", "003", "004", "005", "006",
                "007", "008", "011", "012", "013", "014", "017", "018"]
 COLUNAS_LOJAS_PEDIDO = [f"loja_{loja}" for loja in LISTA_LOJAS]
 
-# --- Funções Auxiliares ---
+# 'formatar_tipos_df' (que está perto do topo) por esta:
 
 def formatar_tipos_df(df: pd.DataFrame) -> pd.DataFrame:
     """Função centralizada para formatar os tipos de dados do DataFrame."""
@@ -18,8 +18,15 @@ def formatar_tipos_df(df: pd.DataFrame) -> pd.DataFrame:
     for col in int_cols_with_zero_fallback:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+    
+    # --- CORREÇÃO APLICADA AQUI ---
     if 'embalagem' in df.columns:
+        # Limpa a coluna "embalagem" tratando sujeira como "12,12,0"
+        df['embalagem'] = df['embalagem'].astype(str).str.split(',').str[0].str.split('.').str[0].str.strip()
+        # Converte para Int64 (que aceita <NA> se o resultado for vazio/nulo)
         df['embalagem'] = pd.to_numeric(df['embalagem'], errors='coerce').astype('Int64')
+    # --- FIM DA CORREÇÃO ---
+    
     return df
 
 @st.cache_data(ttl=300) 
@@ -265,6 +272,7 @@ def show_aprovacao_page():
                             if success:
                                 st.success(message)
                                 get_pedidos_para_aprovacao.clear()
+                                get_pedidos_aprovados_download.clear()
                                 st.rerun()
                             else:
                                 st.error(message)
@@ -286,6 +294,7 @@ def show_aprovacao_page():
                             if success:
                                 st.success(message)
                                 get_pedidos_para_aprovacao.clear()
+                                get_pedidos_aprovados_download.clear()
                                 st.rerun()
                             else:
                                 st.error(message)
