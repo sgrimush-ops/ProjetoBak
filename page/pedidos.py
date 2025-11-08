@@ -47,35 +47,29 @@ COL_WMS_DATA = 'datasalva'
 
 # --- CARREGAMENTO E TRATAMENTO DE DADOS ---
 
-@st.cache_data
+# @st.cache_data <-- REMOVIDO PARA FORÇAR A RELEITURA
 def load_mix_data(file_path: str) -> Optional[pd.DataFrame]:
     """
     Carrega o Mix com tratamento RIGOROSO de tipos de dados.
     """
     try:
         cols_to_use = list(COLS_MIX_MAP.keys())
-        # Lê tudo como string primeiro
         df = pd.read_excel(file_path, sheet_name=0, usecols=cols_to_use, dtype=str)
         df.rename(columns=COLS_MIX_MAP, inplace=True)
 
-        # Coluna A: CODIGOINT (Inteiro, máx 7 dígitos)
         df['Codigo'] = pd.to_numeric(df['Codigo'], errors='coerce').fillna(0).astype(int)
         df = df[(df['Codigo'] > 0) & (df['Codigo'].astype(str).str.len() <= 7)]
-        df['Codigo'] = df['Codigo'].astype(str) # Converte para string para merges
+        df['Codigo'] = df['Codigo'].astype(str) 
 
-        # Colunas B, C, D, I: Strings (Texto)
         for col_str in ['EAN', 'Produto', 'Mix']:
              df[col_str] = df[col_str].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df['Loja'] = df['Loja'].astype(str).str.split('.').str[0].str.zfill(3)
 
         # --- CORREÇÃO DEFINITIVA DA EMBALAGEM ---
-        # Coluna E: EmbSeparacao (Inteiro)
-        # Pega o primeiro item antes de qualquer vírgula ou ponto
         df['Embalagem'] = df['Embalagem'].astype(str).str.split(',').str[0].str.split('.').str[0].str.strip()
         df['Embalagem'] = pd.to_numeric(df['Embalagem'], errors='coerce').fillna(0).astype(int)
         # --- FIM DA CORREÇÃO ---
 
-        # Colunas F, G, H: Decimais (1 casa)
         for col_float in ['PPCX', 'EICX', 'CapCX']:
             if col_float in df.columns:
                 df[col_float] = pd.to_numeric(df[col_float], errors='coerce').fillna(0.0).round(1)
@@ -89,7 +83,7 @@ def load_mix_data(file_path: str) -> Optional[pd.DataFrame]:
         st.error(f"Erro crítico ao tratar o arquivo de Mix: {e}")
         return None
 
-@st.cache_data
+# @st.cache_data <-- REMOVIDO PARA FORÇAR A RELEITURA
 def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
     try:
         df = pd.read_excel(file_path, sheet_name='WMS', usecols=[COL_WMS_CODIGO, COL_WMS_QTD, COL_WMS_DATA])
@@ -105,7 +99,7 @@ def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
         st.error(f"Erro ao carregar WMS: {e}")
         return pd.DataFrame(columns=['Codigo', 'Qtd_CD', 'Data'])
 
-@st.cache_data
+# @st.cache_data <-- REMOVIDO PARA FORÇAR A RELEITURA
 def load_historico_data(file_path: str) -> Optional[pd.DataFrame]:
     try:
         cols = [COL_HIST_CODIGO, COL_HIST_LOJA, COL_HIST_DATA, COL_HIST_EST_LOJA, COL_HIST_PED_LOJA, COL_K, COL_L, COL_O, COL_HIST_EMBALAGEM_HIST]
@@ -119,10 +113,8 @@ def load_historico_data(file_path: str) -> Optional[pd.DataFrame]:
         df = df[df['Codigo'] != '0']
         df['Loja'] = df['Loja'].astype(str).str.split('.').str[0].str.zfill(3)
         
-        # --- CORREÇÃO DEFINITIVA DA EMBALAGEM (HISTÓRICO) ---
         df['Embalagem'] = df['Embalagem'].astype(str).str.split(',').str[0].str.split('.').str[0].str.strip()
         df['Embalagem'] = pd.to_numeric(df['Embalagem'], errors='coerce').fillna(0).astype(int)
-        # --- FIM DA CORREÇÃO ---
 
         for col in ['Estoque_Loja', 'Pedidos_Loja', 'Vd1', 'Vd2', 'Cob']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -147,7 +139,7 @@ def get_cd_stock_in_caixas(df_wms_latest, df_mix_full, df_hist_full, product_cod
     df_merged['Embalagem'] = df_merged['Embalagem'].fillna(0).astype(int)
     df_merged['Estoque_CD_Caixas'] = df_merged.apply(lambda x: int(x['Qtd_CD'] / x['Embalagem']) if x['Embalagem'] > 0 else 0, axis=1)
     if product_code:
-        product_code_str = str(product_code) # Compara string com string
+        product_code_str = str(product_code)
         item = df_merged[df_merged['Codigo'] == product_code_str]
         return item['Estoque_CD_Caixas'].sum() if not item.empty else 0
     return 0
@@ -184,11 +176,6 @@ def save_order_to_db(pedido_final: List[dict]):
 
 # --- Lógica da Página ---
 def show_pedidos_page():
-
-    # --- MENSAGEM DE TESTE ---
-    st.error("TESTE: RODANDO SCRIPT ATUALIZADO (v11_23_AM)")
-    # --- FIM DA MENSAGEM DE TESTE ---
-
     st.title("🛒 Digitação de Pedidos")
     if 'pedido_atual' not in st.session_state: st.session_state.pedido_atual = []
 
@@ -228,7 +215,6 @@ def show_pedidos_page():
     with tab2:
         busca_cod = st.text_input("Código:")
         if busca_cod:
-            # Compara string com string
             res = df_mix[df_mix['Codigo'] == busca_cod.strip()]
             if not res.empty: prod_sel = res.iloc[0]
             else: st.warning("Código não encontrado.")
@@ -250,9 +236,8 @@ def show_pedidos_page():
 
         with st.form("form_qty"):
             qtys, total = {}, 0
-            # Define o número de colunas (máximo 3)
             num_cols = min(len(lojas_user), 3)
-            if num_cols == 0: num_cols = 1 # Evita erro
+            if num_cols == 0: num_cols = 1
             
             cols = st.columns(num_cols)
             for i, loja in enumerate(lojas_user):
@@ -298,11 +283,7 @@ def show_pedidos_page():
             if save_order_to_db(st.session_state.pedido_atual):
                 st.success("Salvo!")
                 st.session_state.pedido_atual = []
-                # Limpa os caches de dados
-                load_mix_data.clear()
-                load_historico_data.clear()
-                load_wms_data.clear()
-                get_recent_orders_display.clear()
+                get_recent_orders_display.clear() # Limpa o cache do histórico
                 st.rerun()
             else: st.error("Erro ao salvar.")
         if c2.button("Limpar"):
@@ -318,41 +299,26 @@ def show_pedidos_page():
                      column_config={"Embalagem": st.column_config.NumberColumn(format="%d")})
     else: st.info("Sem pedidos recentes.")
 
-# No seu page/pedidos.py, substitua a função 'get_recent_orders_display'
-# (que está no final do arquivo) por esta:
-
-@st.cache_data(ttl=60)
+# O cache aqui está OK, pois só é chamado após o salvamento
+@st.cache_data(ttl=60) 
 def get_recent_orders_display(username: str) -> pd.DataFrame:
-    conn = None
+    conn = sqlite3.connect(PEDIDOS_DB_PATH, timeout=10)
     try:
-        conn = sqlite3.connect(PEDIDOS_DB_PATH, timeout=10)
-        data_limite = datetime.now() - timedelta(days=3)
-        data_limite_str = data_limite.strftime('%Y-%m-%d 00:00:00')
+        dt_lim = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d 00:00:00')
+        q = """SELECT STRFTIME('%d/%m/%Y %H:%M', data_pedido) as "Data", codigo as "Cód", produto as "Produto", 
+               embalagem as "Emb", total_cx as "Total", status_aprovacao as "Status" 
+               FROM pedidos_consolidados WHERE usuario_pedido = ? AND data_pedido >= ? ORDER BY data_pedido DESC"""
         
-        # Query original
-        query = """
-                SELECT
-                    STRFTIME('%d/%m/%Y %H:%M', data_pedido) AS "Data Pedido",
-                    codigo AS "Código",
-                    produto AS "Produto",
-                    embalagem AS "Embalagem",
-                    status_item AS "Status Mix",
-                    total_cx AS "Total CX",
-                    status_aprovacao AS "Status Aprovação"
-                FROM pedidos_consolidados
-                WHERE usuario_pedido = ? AND data_pedido >= ?
-                ORDER BY data_pedido DESC
-        """
-        df = pd.read_sql_query(query, conn, params=(username, data_limite_str))
-        # --- CORREÇÃO DEFINITIVA DA EMBALAGEM ---
-        if "Embalagem" in df.columns:
-            df["Embalagem"] = df["Embalagem"].astype(str).str.split(',').str[0].str.split('.').str[0].str.strip()
-            df["Embalagem"] = pd.to_numeric(df["Embalagem"], errors='coerce').fillna(0).astype(int)
+        df = pd.read_sql_query(q, conn, params=(username, dt_lim))
+        
+        # --- CORREÇÃO FINAL TAMBÉM NO HISTÓRICO ---
+        if "Emb" in df.columns:
+            df["Emb"] = df["Emb"].astype(str).str.split(',').str[0].str.split('.').str[0].str.strip()
+            df["Emb"] = pd.to_numeric(df["Emb"], errors='coerce').fillna(0).astype(int)
         # --- FIM DA CORREÇÃO ---
-            
+
         return df
-    except sqlite3.Error as e:
-        st.error(f"Erro ao buscar histórico de pedidos: {e}")
+    except Exception as e: 
+        st.error(f"Erro ao ler histórico: {e}")
         return pd.DataFrame()
-    finally:
-        if conn: conn.close()
+    finally: conn.close()
