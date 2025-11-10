@@ -3,7 +3,8 @@ import sqlite3
 import pandas as pd
 import hashlib
 from datetime import datetime, timedelta
-import json  # Para lidar com a lista de lojas
+import json
+import os
 
 # --- Importa as Páginas ---
 from page.home import show_home_page
@@ -13,12 +14,18 @@ from page.status import show_status_page
 from page.admin_maint import show_admin_page
 from page.historico import show_historico_page
 from page.pedidos import show_pedidos_page
-# from page.analise_pedidos import show_analise_pedidos_page # <-- 1. REMOVIDO
-from page.aprovacao_pedidos import show_aprovacao_page  # <-- 1. ADICIONADO
+from page.aprovacao_pedidos import show_aprovacao_page
 
 # --- Configurações Globais ---
-DB_PATH = 'data/database.db'
-PEDIDOS_DB_PATH = 'data/pedidos.db'
+# Define o caminho-base. No Render será /var/data, localmente será 'data'
+BASE_DATA_PATH = os.environ.get('RENDER_DISK_PATH', 'data')
+os.makedirs(BASE_DATA_PATH, exist_ok=True)  # Garante que a pasta exista
+
+# Mude os caminhos dos bancos .db para usar o BASE_DATA_PATH
+DB_PATH = os.path.join(BASE_DATA_PATH, 'database.db')
+PEDIDOS_DB_PATH = os.path.join(BASE_DATA_PATH, 'pedidos.db')
+
+# (O resto das suas variáveis globais, como LISTA_LOJAS, fica igual)
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006",
                "007", "008", "011", "012", "013", "014", "017", "018"]
 COLUNAS_LOJAS_PEDIDO = [f"loja_{loja}" for loja in LISTA_LOJAS]
@@ -39,7 +46,6 @@ st.set_page_config(
 )
 
 # --- Funções de Segurança (Hashing) ---
-
 
 def make_hashes(password):
     """Gera um hash SHA256 para a senha."""
@@ -250,10 +256,12 @@ def main():
 
             if logged_in:
                 st.session_state['logged_in'] = True
-                st.session_state['username'] = username.lower()  # Salva minúsculo
+                # Salva minúsculo
+                st.session_state['username'] = username.lower()
                 st.session_state['role'] = role
                 st.session_state['lojas_acesso'] = lojas
-                update_user_status(username, 'LOGADO')  # ATUALIZA STATUS NO LOGIN
+                # ATUALIZA STATUS NO LOGIN
+                update_user_status(username, 'LOGADO')
                 st.rerun()
             else:
                 st.warning("Nome de usuário ou senha incorretos.")
