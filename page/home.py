@@ -60,9 +60,9 @@ def show_home_page(engine, base_data_path):
             st.rerun()
 
     with col2_nav:
-        # MUDANÇA: Define 'st.session_state.page' para o nome exato da página
-        if st.button("📈 Ver Análise de Evolução", use_container_width=True):
-            st.session_state['page'] = "Análise de Evolução Estoque CD"
+        # MUDANÇA: Botão agora aponta para o Histórico de Transferência
+        if st.button("📊 Ver Histórico de Transferência", use_container_width=True):
+            st.session_state['page'] = "Histórico de Transferencia CD"
             st.rerun()
             
     if lojas_do_usuario:
@@ -71,5 +71,6 @@ def show_home_page(engine, base_data_path):
             if st.button("🛒 Digitar Pedidos", use_container_width=True, type="primary"):
                 st.session_state['page'] = "Digitar Pedidos"
                 st.rerun()
+
 
 
