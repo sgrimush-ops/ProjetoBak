@@ -175,8 +175,6 @@ def login_page():
             st.error("Usuário ou senha inválidos.")
 
     st.stop()
-
-
 # =========================================================
 # MAIN APP
 # =========================================================
@@ -197,7 +195,7 @@ def main():
         st.session_state["logged_in"] = False
         st.rerun()
 
-    # --- MENU LATERAL ---
+    # --- MENU LATERAL (formato original restaurado) ---
     paginas_disponiveis = {
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
@@ -214,8 +212,37 @@ def main():
         paginas_disponiveis["Administração"] = show_admin_page
         paginas_disponiveis["Atualização de Dependências"] = show_admin_tools
 
-    selected_page = st.sidebar.radio("Selecione a Página:", list(paginas_disponiveis.keys()))
+    
+    # MUDANÇA DE NAVEGAÇÃO: Lógica para sincronizar botões e sidebar
+    page_list = list(paginas_disponiveis.keys())
+
+    # Se 'st.session_state.page' não existir, comece na "Home"
+    if "page" not in st.session_state:
+        st.session_state.page = "Home"
+    
+    # Se 'st.session_state.page' foi definida (ex: por um botão)
+    # mas não é uma página válida para este usuário, volte para "Home"
+    if st.session_state.page not in page_list:
+        st.session_state.page = "Home"
+
+    # Define um callback para atualizar o session state quando o rádio mudar
+    def update_sidebar_selection():
+        st.session_state.page = st.session_state["sidebar_radio_key"]
+
+    # Encontra o índice da página atual para definir o 'default' do rádio
+    current_page_index = page_list.index(st.session_state.page)
+
+    st.sidebar.radio(
+        "Selecione a Página:", 
+        page_list, 
+        index=current_page_index,
+        on_change=update_sidebar_selection, # Callback
+        key="sidebar_radio_key" # Chave única
+    )
+    
+    # Executa a página que está salva no 'st.session_state.page'
+    paginas_disponiveis[st.session_state.page](engine=engine, base_data_path=BASE_DATA_PATH)
+
 
 if __name__ == "__main__":
     main()
-
