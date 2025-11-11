@@ -1,3 +1,12 @@
+from page.admin_tools import show_admin_tools
+from page.aprovacao_pedidos import show_aprovacao_page
+from page.pedidos import show_pedidos_page
+from page.historico import show_historico_page
+from page.admin_maint import show_admin_page
+from page.status import show_status_page
+from page.ae import show_ae_page
+from page.consulta import show_consulta_page
+from page.home import show_home_page
 import streamlit as st
 import pandas as pd
 import hashlib
@@ -7,10 +16,48 @@ import os
 import sqlalchemy
 from sqlalchemy import create_engine, text
 import sqlite3
+import psycopg2
+
+
+def verificar_usuario(username, senha):
+    """Verifica usuário no banco e define perfil (admin/usuário)."""
+    senha_hash = hashlib.sha256(senha.encode()).hexdigest()
+    db_url = os.getenv("DATABASE_URL")
+
+    query = "SELECT username, perfil FROM usuarios WHERE username = %s AND senha = %s"
+    params = (username, senha_hash)
+
+    try:
+        if db_url:
+            # --- Render (PostgreSQL)
+            conn = psycopg2.connect(db_url)
+            cur = conn.cursor()
+            cur.execute(query, params)
+        else:
+            # --- Local (SQLite)
+            conn = sqlite3.connect("data/database.db")
+            cur = conn.cursor()
+            cur.execute(query.replace("%s", "?"), params)
+
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if row:
+            st.session_state["username"] = row[0]
+            st.session_state["is_admin"] = (row[1].lower() == "admin")
+            return True
+        else:
+            return False
+
+    except Exception as e:
+        st.error(f"Erro ao autenticar: {e}")
+        return False
 
 # =========================================================
 #  CONEXÃO DINÂMICA COM O BANCO (SQLite local / PostgreSQL Render)
 # =========================================================
+
 
 def get_engine():
     """
@@ -26,16 +73,8 @@ def get_engine():
         local_path = "data/pedidos.db"
         return create_engine(f"sqlite:///{local_path}")
 
+
 # --- Importa as Páginas ---
-from page.home import show_home_page
-from page.consulta import show_consulta_page
-from page.ae import show_ae_page
-from page.status import show_status_page
-from page.admin_maint import show_admin_page
-from page.historico import show_historico_page
-from page.pedidos import show_pedidos_page
-from page.aprovacao_pedidos import show_aprovacao_page
-from page.admin_tools import show_admin_tools
 
 
 # --- Configurações Globais ---
@@ -73,6 +112,7 @@ st.set_page_config(
 )
 
 # --- Funções de Segurança (Hashing) ---
+
 
 def make_hashes(password):
     """Gera um hash SHA256 para a senha."""
@@ -374,8 +414,27 @@ def main():
     paginas_disponiveis[selected_page]()
 
 # --- Ponto de Entrada da Aplicação ---
+def login_page():
+    st.title("🔐 Login do Sistema")
+    username = st.text_input("Usuário:")
+    senha = st.text_input("Senha:", type="password")
+
+    if st.button("Entrar", type="primary"):
+        if verificar_usuario(username, senha):
+            st.success(f"Bem-vindo, {username}!")
+            st.rerun()
+        else:
+            st.error("Usuário ou senha inválidos.")
+
+    st.stop()  # Impede o acesso sem login
+
+
+def main():
+    if "username" not in st.session_state:
+        login_page()
+
+    # O resto do seu main continua igual...
 
 
 if __name__ == "__main__":
     main()
-
