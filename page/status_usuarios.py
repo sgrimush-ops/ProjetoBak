@@ -1,40 +1,36 @@
 import streamlit as st
-import sqlite3
+# MUDANÇA: Removido sqlite3
+from sqlalchemy import text # MUDANÇA: Adicionado import text
 import pandas as pd
 from datetime import datetime, timedelta
 
-# Defina o caminho do seu banco de dados
-DB_PATH = 'data/database.db'
+# MUDANÇA: Removido DB_PATH
 # Define o tempo limite de inatividade (em minutos)
 INACTIVITY_LIMIT_MINUTES = 5
 
-@st.cache_data(ttl=60) # Cache de 1 minuto para esta função
-def get_user_status_df():
+# MUDANÇA: Removido @st.cache_data, adicionado 'engine'
+def get_user_status_df(engine):
     """
     Busca usuários no DB, calcula o status (com cores) e ordena a lista.
     """
-    conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        df_users = pd.read_sql_query("SELECT username, ultimo_acesso, status_logado FROM users", conn)
-    except sqlite3.Error as e:
+        # MUDANÇA: Usando 'engine' e 'text()'
+        query = text("SELECT username, ultimo_acesso, status_logado FROM users")
+        df_users = pd.read_sql_query(query, con=engine)
+    except Exception as e:
         st.error(f"Erro ao carregar usuários: {e}")
         return pd.DataFrame()
-    finally:
-        if conn:
-            conn.close()
 
     if df_users.empty:
         return pd.DataFrame()
 
     agora = pd.to_datetime(datetime.now())
     
-    # 1. Converte datas, tratando erros (como '2025-m-04')
+    # 1. Converte datas (Postgres já deve retornar datetime, mas 'coerce' é seguro)
     df_users['ultimo_acesso_dt'] = pd.to_datetime(df_users['ultimo_acesso'], errors='coerce')
     
     # 2. Calcula o tempo em segundos
-    # Preenche NaT (datas nulas ou inválidas) com um valor muito alto (ex: 10 anos em segundos)
-    # para que eles caiam para o final da lista (status "Vermelho").
+    # Preenche NaT (datas nulas ou inválidas) com um valor muito alto
     tempo_total_segundos = (agora - df_users['ultimo_acesso_dt']).dt.total_seconds().fillna(315360000)
     df_users['Tempo_Segundos'] = tempo_total_segundos
     
@@ -43,11 +39,7 @@ def get_user_status_df():
     limite_recente_seg = 24 * 60 * 60 # 24 horas
 
     # 4. Define Cor e Chave de Ordenação
-    # Chave 1: Ativo (Verde)
-    # Chave 2: Inativo Recente (Preto)
-    # Chave 3: Inativo Antigo (Vermelho)
-    
-    df_users['Sort_Key'] = 3 # Padrão: Vermelho/Antigo
+    df_users['Sort_Key'] = 3
     df_users['Cor'] = "red"
     df_users['Status_Desc'] = "Inativo (> 24h)"
 
@@ -69,21 +61,23 @@ def get_user_status_df():
         lambda x: f"{int(x // 60)}m {int(x % 60)}s" if x < 315360000 else "N/A"
     )
 
-    # 6. Ordena o DataFrame (Chave de Ordenação primeiro, depois pelo tempo)
+    # 6. Ordena o DataFrame
     df_users = df_users.sort_values(by=['Sort_Key', 'Tempo_Segundos'], ascending=[True, True])
     
     return df_users
 
-def show_status_page():
+# MUDANÇA: Adicionado 'engine' e 'base_data_path'
+def show_status_page(engine, base_data_path):
     """Cria a interface da página de status."""
     st.title("📊 Status dos Usuários Ativos")
     st.markdown(f"Usuários considerados ativos se acessaram nos últimos **{INACTIVITY_LIMIT_MINUTES} minutos**.")
 
     if st.button("🔄 Atualizar Status"):
-        get_user_status_df.clear() # Limpa o cache desta função
+        # MUDANÇA: Removido 'clear()'
         st.rerun()
 
-    df_status = get_user_status_df()
+    # MUDANÇA: Passando 'engine'
+    df_status = get_user_status_df(engine)
     
     st.markdown("---")
     
@@ -102,7 +96,7 @@ def show_status_page():
         for index, row in df_status.iterrows():
             cor = row['Cor']
             
-            # Define o texto de status (se estiver ativo, mostra 'Ativo', senão mostra o tempo)
+            # Define o texto de status
             if row['Sort_Key'] == 1:
                 status_texto = "Ativo"
             else:
