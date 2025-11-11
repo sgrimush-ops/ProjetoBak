@@ -4,9 +4,8 @@ import hashlib
 from datetime import datetime
 import json
 import os
-import sqlite3
-import psycopg2
-from sqlalchemy import create_engine
+# MUDANÇA: Removido 'sqlite3' e 'psycopg2'
+from sqlalchemy import create_engine, text  # MUDANÇA: Importado 'text'
 
 # --- Importa as páginas ---
 from page.home import show_home_page
@@ -25,11 +24,8 @@ from page.admin_tools import show_admin_tools
 # =========================================================
 st.set_page_config(page_title="Gestão de Produtos", layout="wide")
 
-BASE_DATA_PATH = os.environ.get("RENDER_DISK_PATH", "data")
-os.makedirs(BASE_DATA_PATH, exist_ok=True)
-
-DB_PATH = os.path.join(BASE_DATA_PATH, "database.db")
-PEDIDOS_DB_PATH = os.path.join(BASE_DATA_PATH, "pedidos.db")
+# MUDANÇA: Removido 'BASE_DATA_PATH', 'DB_PATH', 'PEDIDOS_DB_PATH'.
+# Eles não são mais necessários com o Postgres.
 
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006",
                "007", "008", "011", "012", "013", "014", "017", "018"]
@@ -48,71 +44,83 @@ def check_hashes(password, hashed_text):
 
 
 # =========================================================
-# CONEXÃO DINÂMICA DE BANCO
+# MUDANÇA: CONEXÃO DE BANCO (APENAS POSTGRES)
 # =========================================================
 def get_engine():
     db_url = os.getenv("DATABASE_URL")
-    if db_url:
-        return create_engine(db_url, connect_args={"sslmode": "require"})
-    else:
-        return create_engine(f"sqlite:///{PEDIDOS_DB_PATH}")
+    
+    # MUDANÇA: Verificação para garantir que a URL existe
+    if not db_url:
+        st.error("Erro fatal: A variável de ambiente DATABASE_URL não foi encontrada.")
+        st.stop()
+        
+    # MUDANÇA: O Render usa 'postgres://' mas SQLAlchemy prefere 'postgresql://'
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+        
+    # MUDANÇA: Removido o 'else' que conectava ao SQLite
+    return create_engine(db_url, connect_args={"sslmode": "require"})
+
+# MUDANÇA: Criamos o 'engine' uma vez aqui para ser usado em todo o app
+engine = get_engine()
 
 
 # =========================================================
 # CRIAÇÃO / MIGRAÇÃO DE TABELAS
 # =========================================================
 def create_db_tables():
-    conn_users = sqlite3.connect(DB_PATH, timeout=10)
-    conn_pedidos = sqlite3.connect(PEDIDOS_DB_PATH, timeout=10)
-    c_users = conn_users.cursor()
-    c_pedidos = conn_pedidos.cursor()
+    # MUDANÇA: Removidas conexões sqlite
+    # MUDANÇA: Usando o 'engine' global do SQLAlchemy
+    try:
+        with engine.connect() as conn:
+            # --- tabela de usuários ---
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY,
+                    password TEXT NOT NULL,
+                    ultimo_acesso TIMESTAMP,
+                    status_logado TEXT,
+                    role TEXT DEFAULT 'user',
+                    lojas_acesso TEXT
+                )
+            """))
 
-    # --- tabela de usuários ---
-    c_users.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            password TEXT NOT NULL,
-            ultimo_acesso TIMESTAMP,
-            status_logado TEXT,
-            role TEXT DEFAULT 'user',
-            lojas_acesso TEXT
-        )
-    """)
-
-    # --- tabela de pedidos ---
-    lojas_sql_cols = ", ".join([f"loja_{loja} INTEGER DEFAULT 0" for loja in LISTA_LOJAS])
-    c_pedidos.execute(f"""
-        CREATE TABLE IF NOT EXISTS pedidos_consolidados (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT NOT NULL,
-            produto TEXT,
-            ean TEXT,
-            embseparacao INTEGER,
-            data_pedido TIMESTAMP,
-            data_aprovacao TIMESTAMP,
-            usuario_pedido TEXT,
-            status_item TEXT,
-            status_aprovacao TEXT DEFAULT 'Pendente',
-            total_cx INTEGER,
-            {lojas_sql_cols}
-        )
-    """)
-
-    conn_users.commit()
-    conn_pedidos.commit()
-    conn_users.close()
-    conn_pedidos.close()
+            # --- tabela de pedidos ---
+            lojas_sql_cols = ", ".join([f"loja_{loja} INTEGER DEFAULT 0" for loja in LISTA_LOJAS])
+            # MUDANÇA: 'AUTOINCREMENT' é 'SERIAL' no Postgres, mas vamos usar o padrão
+            conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS pedidos_consolidados (
+                    id SERIAL PRIMARY KEY, 
+                    codigo TEXT NOT NULL,
+                    produto TEXT,
+                    ean TEXT,
+                    embseparacao INTEGER,
+                    data_pedido TIMESTAMP,
+                    data_aprovacao TIMESTAMP,
+                    usuario_pedido TEXT,
+                    status_item TEXT,
+                    status_aprovacao TEXT DEFAULT 'Pendente',
+                    total_cx INTEGER,
+                    {lojas_sql_cols}
+                )
+            """))
+            conn.commit() # MUDANÇA: Commit da transação
+            
+    except Exception as e:
+        st.error(f"Erro ao inicializar o banco de dados: {e}")
+        st.stop()
 
 
 # =========================================================
 # LOGIN E PERFIL DE USUÁRIO
 # =========================================================
 def check_login_and_get_roles(username, password):
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    c = conn.cursor()
-    c.execute("SELECT password, role, lojas_acesso FROM users WHERE username = ?", (username.lower(),))
-    data = c.fetchone()
-    conn.close()
+    # MUDANÇA: Removida conexão sqlite
+    # MUDANÇA: Usando o 'engine' global com 'text()'
+    with engine.connect() as conn:
+        query = text("SELECT password, role, lojas_acesso FROM users WHERE username = :username")
+        result = conn.execute(query, {"username": username.lower()})
+        data = result.fetchone()
 
     if data:
         hashed_password, role, lojas_acesso_json = data
@@ -128,17 +136,21 @@ def check_login_and_get_roles(username, password):
 
 
 def update_user_status(username, status):
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        c = conn.cursor()
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("UPDATE users SET ultimo_acesso=?, status_logado=? WHERE username=?",
-                  (current_time, status, username.lower()))
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"Erro ao atualizar status: {e}")
-    finally:
-        conn.close()
+    # MUDANÇA: Removida conexão sqlite e try/except desnecessário
+    # MUDANÇA: Usando 'engine.begin()' para auto-commit
+    current_time = datetime.now() # MUDANÇA: Passando objeto datetime
+    query = text("""
+        UPDATE users 
+        SET ultimo_acesso = :time, status_logado = :status 
+        WHERE username = :username
+    """)
+    
+    with engine.begin() as conn:
+        conn.execute(query, {
+            "time": current_time, 
+            "status": status, 
+            "username": username.lower()
+        })
 
 
 # =========================================================
@@ -184,7 +196,7 @@ def main():
         st.session_state["logged_in"] = False
         st.rerun()
 
-    # --- MENU LATERAL (formato original restaurado) ---
+    # --- MENU LATERAL ---
     paginas_disponiveis = {
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
@@ -202,7 +214,11 @@ def main():
         paginas_disponiveis["Atualização de Dependências"] = show_admin_tools
 
     selected_page = st.sidebar.radio("Selecione a Página:", list(paginas_disponiveis.keys()))
-    paginas_disponiveis[selected_page]()
+    
+    # MUDANÇA: Passando o 'engine' para todas as páginas
+    # Você precisará atualizar seus arquivos na pasta 'page'
+    # para aceitar este 'engine' e usá-lo.
+    paginas_disponiveis[selected_page](engine=engine)
 
 
 if __name__ == "__main__":
