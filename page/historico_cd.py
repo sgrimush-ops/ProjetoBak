@@ -6,8 +6,8 @@ import os
 import re # Para a limpeza de strings na busca
 
 # --- Configurações Iniciais ---
-HIST_FILE_PATH = 'data/historico_solic.xlsm'
-WMS_FILE_PATH = 'data/WMS.xlsm'
+# MUDANÇA: Removidos HIST_FILE_PATH e WMS_FILE_PATH
+# Os caminhos serão gerados dinamicamente.
 
 # --- Nomes das Colunas (Conforme sua descrição) ---
 # Arquivo 'historico_solic.xlsm'
@@ -156,17 +156,24 @@ def get_cd_stock_in_caixas(df_wms_latest, df_hist_full, product_code=None):
     return df_merged['Estoque_CD_Caixas'].sum()
 
 
-def show_historico_page():
+# MUDANÇA: Adicionado 'engine' e 'base_data_path' como argumentos
+# (O 'engine' não será usado aqui)
+def show_historico_page(engine, base_data_path):
     """Cria a interface da página de Histórico de Solicitações."""
     
     st.title("📊 Histórico de Solicitações vs. Estoques")
 
+    # MUDANÇA: Definindo os caminhos dos arquivos dinamicamente
+    hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
+    wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
+
     # --- Carregamento de Dados ---
-    df_hist_full = load_hist_data(HIST_FILE_PATH)
-    df_wms_latest = load_wms_data(WMS_FILE_PATH)
+    # MUDANÇA: Usando os caminhos dinâmicos
+    df_hist_full = load_hist_data(hist_file_path)
+    df_wms_latest = load_wms_data(wms_file_path)
 
     if df_hist_full is None or df_wms_latest is None:
-        st.error("Falha ao carregar um ou mais arquivos de dados. Verifique os caminhos e as abas.")
+        st.error("Falha ao carregar um ou mais arquivos de dados. Verifique os uploads na página de Admin.")
         return
 
     # --- LÓGICA DE DATA PADRÃO ---
