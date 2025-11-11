@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 import os
 
 # --- Configurações e Path ---
-FILE_PATH = 'data/WMS.xlsm'
+# MUDANÇA: Removido FILE_PATH daqui. Será gerado dinamicamente.
 # IMPORTANTE: Coloque o nome EXATO da sua coluna de Descrição.
 COLUNA_DESCRICAO = 'Produto' 
 COLUNA_ENDERECO = 'Endereço'
@@ -59,18 +59,26 @@ def preprocess_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 # --- Função Principal de Exibição ---
 
-def show_consulta_page():
+# MUDANÇA: Adicionado 'engine' e 'base_data_path' como argumentos
+# (O 'engine' não será usado aqui, mas é necessário para consistência)
+def show_consulta_page(engine, base_data_path):
     """Cria a interface da página de consulta de produtos com busca por descrição."""
     st.title("Consulta de Itens por Descrição/Código")
 
+    # MUDANÇA: Definir o caminho completo do arquivo dinamicamente
+    file_path = os.path.join(base_data_path, "WMS.xlsm")
+
     # 1. Carregamento e Pré-processamento
     try:
-        mod_time = os.path.getmtime(FILE_PATH)
+        # MUDANÇA: Usando o 'file_path' dinâmico
+        mod_time = os.path.getmtime(file_path)
     except FileNotFoundError:
-        st.error(f"Arquivo '{FILE_PATH}' não encontrado. Verifique se o caminho está correto.")
+        # MUDANÇA: Mensagem de erro usa a variável
+        st.error(f"Arquivo '{file_path}' não encontrado. Verifique o upload na página de Admin.")
         return
         
-    df_raw = load_data(FILE_PATH, mod_time)
+    # MUDANÇA: Usando o 'file_path' dinâmico
+    df_raw = load_data(file_path, mod_time)
     if df_raw is None:
         return
     df_processed = preprocess_data(df_raw)
@@ -192,4 +200,3 @@ def show_consulta_page():
     elif not termo_busca and not codigo_direto:
         st.write("### Planilha do Dia (Primeiras Linhas)")
         st.dataframe(df_filtrado.head(10)) # Exibe apenas as 10 primeiras linhas para performance
-        
