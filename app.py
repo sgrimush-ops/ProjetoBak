@@ -18,14 +18,15 @@ from page.status import show_status_page
 from page.admin_maint import show_admin_page
 from page.admin_tools import show_admin_tools
 
-
-# =========================================================
 # CONFIGURAÇÕES INICIAIS
 # =========================================================
 st.set_page_config(page_title="Gestão de Produtos", layout="wide")
 
-# MUDANÇA: Removido 'BASE_DATA_PATH', 'DB_PATH', 'PEDIDOS_DB_PATH'.
-# Eles não são mais necessários com o Postgres.
+# MUDANÇA: Adicionar esta seção de volta para os ARQUIVOS
+# O 'data' minúsculo é o fallback para rodar no seu PC local.
+BASE_DATA_PATH = os.environ.get("RENDER_DISK_PATH", "data")
+# Garante que o diretório exista (tanto no Render quanto local)
+os.makedirs(BASE_DATA_PATH, exist_ok=True) 
 
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006",
                "007", "008", "011", "012", "013", "014", "017", "018"]
@@ -214,12 +215,7 @@ def main():
         paginas_disponiveis["Atualização de Dependências"] = show_admin_tools
 
     selected_page = st.sidebar.radio("Selecione a Página:", list(paginas_disponiveis.keys()))
-    
-    # MUDANÇA: Passando o 'engine' para todas as páginas
-    # Você precisará atualizar seus arquivos na pasta 'page'
-    # para aceitar este 'engine' e usá-lo.
-    paginas_disponiveis[selected_page](engine=engine)
-
 
 if __name__ == "__main__":
     main()
+
