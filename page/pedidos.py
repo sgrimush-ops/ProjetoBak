@@ -35,7 +35,7 @@ COLS_MIX_MAP = {
 #  📂 FUNÇÕES DE LEITURA DE DADOS
 # =========================================================
 
-# Esta função permanece igual, mas ATENÇÃO ao caminho do arquivo.
+@st.cache_data
 def load_mix_data(file_path: str):
     try:
         df = pd.read_excel(file_path, dtype=str)
@@ -53,7 +53,7 @@ def load_mix_data(file_path: str):
         st.error(f"Erro ao carregar Mix: {e}")
         return pd.DataFrame()
 
-# Esta função permanece igual, mas ATENÇÃO ao caminho do arquivo.
+@st.cache_data
 def load_historico_data(file_path: str):
     try:
         df = pd.read_excel(file_path, dtype=str)
@@ -73,7 +73,7 @@ def load_historico_data(file_path: str):
         st.error(f"Erro ao carregar Histórico: {e}")
         return pd.DataFrame()
 
-# Esta função permanece igual, mas ATENÇÃO ao caminho do arquivo.
+@st.cache_data
 def load_wms_data(file_path: str):
     try:
         df = pd.read_excel(file_path, sheet_name='WMS', usecols=[
@@ -300,4 +300,5 @@ def show_pedidos_page(engine, base_data_path):
         st.dataframe(df_rec, hide_index=True, use_container_width=True)
     else:
         st.info("Sem pedidos recentes.")
+
 
