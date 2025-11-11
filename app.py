@@ -8,6 +8,7 @@ import sqlite3
 import psycopg2
 from sqlalchemy import create_engine
 
+# --- Importa as páginas ---
 from page.home import show_home_page
 from page.consulta import show_consulta_page
 from page.ae import show_ae_page
@@ -18,10 +19,10 @@ from page.status import show_status_page
 from page.admin_maint import show_admin_page
 from page.admin_tools import show_admin_tools
 
-# =========================================================
-# CONFIGURAÇÕES BÁSICAS
-# =========================================================
 
+# =========================================================
+# CONFIGURAÇÕES INICIAIS
+# =========================================================
 st.set_page_config(page_title="Gestão de Produtos", layout="wide")
 
 BASE_DATA_PATH = os.environ.get("RENDER_DISK_PATH", "data")
@@ -66,6 +67,7 @@ def create_db_tables():
     c_users = conn_users.cursor()
     c_pedidos = conn_pedidos.cursor()
 
+    # --- tabela de usuários ---
     c_users.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -77,6 +79,7 @@ def create_db_tables():
         )
     """)
 
+    # --- tabela de pedidos ---
     lojas_sql_cols = ", ".join([f"loja_{loja} INTEGER DEFAULT 0" for loja in LISTA_LOJAS])
     c_pedidos.execute(f"""
         CREATE TABLE IF NOT EXISTS pedidos_consolidados (
@@ -181,6 +184,7 @@ def main():
         st.session_state["logged_in"] = False
         st.rerun()
 
+    # --- MENU LATERAL (formato original restaurado) ---
     paginas_disponiveis = {
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
