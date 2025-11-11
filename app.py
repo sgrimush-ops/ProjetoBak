@@ -175,18 +175,51 @@ def login_page():
             st.error("Usuário ou senha inválidos.")
 
     st.stop()
+  # =========================================================
+# MUDANÇA: Adicionar esta função
+# =========================================================
+def check_if_first_run(engine):
+    """Verifica se existe algum usuário no banco."""
+    try:
+        with engine.connect() as conn:
+            query = text("SELECT COUNT(username) FROM users")
+            result = conn.execute(query)
+            count = result.scalar_one_or_none() or 0
+        return count == 0
+    except Exception as e:
+        # Se a tabela não existir ainda (embora o create_db_tables deva rodar antes)
+        if "does not exist" in str(e):
+            return True
+        st.error(f"Erro ao verificar contagem de usuários: {e}")
+        return False # Assume que não é o first run se der erro
 # =========================================================
 # MAIN APP
 # =========================================================
 def main():
     create_db_tables()
+    
+    # MUDANÇA: Adiciona a verificação de primeiro acesso
+    is_first_run = check_if_first_run(engine)
 
     if "logged_in" not in st.session_state:
         st.session_state["logged_in"] = False
 
-    if not st.session_state["logged_in"]:
-        login_page()
+    # MUDANÇA: Nova lógica de roteamento
+    # Se for o primeiro acesso, força a página de admin
+    if is_first_run:
+        st.warning("🚀 Bem-vindo! Detectamos que este é o primeiro acesso.")
+        st.info("Por favor, crie o primeiro usuário administrador do sistema.")
+        
+        # 'show_admin_page' e 'BASE_DATA_PATH' vêm do topo do seu app.py
+        show_admin_page(engine=engine, base_data_path=BASE_DATA_PATH)
+        
+        st.stop() # Para a execução aqui, não mostrando o login
 
+    # Se não for o primeiro acesso, continua normal
+    if not st.session_state["logged_in"]:
+        login_page() # App normal, chama o login
+
+    # --- O RESTO DA PÁGINA (SÓ RODA SE LOGADO) ---
     st.sidebar.success(f"Logado como: {st.session_state['username']}")
 
     if st.sidebar.button("Logout"):
@@ -216,34 +249,27 @@ def main():
     # MUDANÇA DE NAVEGAÇÃO: Lógica para sincronizar botões e sidebar
     page_list = list(paginas_disponiveis.keys())
 
-    # Se 'st.session_state.page' não existir, comece na "Home"
     if "page" not in st.session_state:
         st.session_state.page = "Home"
     
-    # Se 'st.session_state.page' foi definida (ex: por um botão)
-    # mas não é uma página válida para este usuário, volte para "Home"
     if st.session_state.page not in page_list:
         st.session_state.page = "Home"
 
-    # Define um callback para atualizar o session state quando o rádio mudar
     def update_sidebar_selection():
         st.session_state.page = st.session_state["sidebar_radio_key"]
 
-    # Encontra o índice da página atual para definir o 'default' do rádio
     current_page_index = page_list.index(st.session_state.page)
 
     st.sidebar.radio(
         "Selecione a Página:", 
         page_list, 
         index=current_page_index,
-        on_change=update_sidebar_selection, # Callback
-        key="sidebar_radio_key" # Chave única
+        on_change=update_sidebar_selection,
+        key="sidebar_radio_key"
     )
     
-    # Executa a página que está salva no 'st.session_state.page'
     paginas_disponiveis[st.session_state.page](engine=engine, base_data_path=BASE_DATA_PATH)
 
 
 if __name__ == "__main__":
     main()
-
