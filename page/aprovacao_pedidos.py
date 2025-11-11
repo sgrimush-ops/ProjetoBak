@@ -35,7 +35,9 @@ def get_pedidos_para_aprovacao(date_start, date_end, only_pending: bool) -> pd.D
     """Busca pedidos para a grade de aprovação, com filtros de data e status."""
     conn = None
     try:
-        conn = sqlite3.connect(PEDIDOS_DB_PATH, timeout=10)
+        engine = get_engine()
+        conn = engine.raw_connection()
+
         start_str = datetime.combine(
             date_start, datetime.min.time()).strftime('%Y-%m-%d %H:%M:%S')
         end_str = datetime.combine(
