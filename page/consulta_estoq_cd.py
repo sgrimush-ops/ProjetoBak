@@ -13,7 +13,7 @@ COLUNA_ENDERECO = 'Endereço'
 
 # --- Funções de Cache e Helpers ---
 
-@st.cache_resource(ttl=timedelta(hours=24))
+@st.cache_resource(ttl=timedelta(hours=18))
 def get_today():
     """Retorna a data atual e força o cache a expirar a cada 24h."""
     return datetime.now().date()
@@ -200,3 +200,4 @@ def show_consulta_page(engine, base_data_path):
     elif not termo_busca and not codigo_direto:
         st.write("### Planilha do Dia (Primeiras Linhas)")
         st.dataframe(df_filtrado.head(10)) # Exibe apenas as 10 primeiras linhas para performance
+
