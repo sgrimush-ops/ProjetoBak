@@ -250,8 +250,16 @@ def show_historico_page(engine, base_data_path):
 
     # Exibe o gráfico de linhas
     if not df_final_grafico.empty:
-        st.line_chart(df_final_grafico)
+        st.line_chart(
+            df_final_grafico,
+            x='Dia',
+            y=['Estoque_CD_Item', 'Estoque_Lojas_Item', 'Pedidos_Item'], # Reordenado para cor
+            color=["#0000FF", "#FFA500", "#008000"], # MUDANÇA: Azul, Laranja, Verde para Pedidos_Item
+            use_container_width=True
+        )
+        
         with st.expander("Ver dados da tabela"):
             st.dataframe(df_final_grafico)
     else:
         st.warning("Nenhum dado encontrado para exibir no gráfico.")
+
