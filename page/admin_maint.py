@@ -1,34 +1,30 @@
 import streamlit as st
-import sqlite3
+# MUDANÇA: Removido sqlite3
+from sqlalchemy import text # MUDANÇA: Adicionado import text
 import pandas as pd
 import hashlib
-import json # Para salvar a lista de lojas
+import json
 from datetime import datetime
 
 # --- Configurações Globais ---
-DB_PATH = 'data/database.db'
-# Lista de Lojas (deve ser idêntica à do app.py)
+# MUDANÇA: Removido DB_PATH
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006", "007", "008", "011", "012", "013", "014", "017", "018"]
 ROLES_DISPONIVEIS = ["user", "admin"]
 
 # --- Funções Auxiliares de Hashing (Copiadas do app.py) ---
-
 def make_hashes(password):
     """Gera um hash SHA256 para a senha."""
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 # --- Funções de Manutenção do DB (CRUD de Usuários) ---
 
-@st.cache_data(ttl=60)
-def get_all_users_details():
+# MUDANÇA: Removido @st.cache_data, adicionado 'engine'
+def get_all_users_details(engine):
     """Busca todos os usuários, seus roles e lojas."""
-    conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        # Busca todas as informações de permissão
-        df = pd.read_sql_query("SELECT username, role, lojas_acesso FROM users", conn)
+        # MUDANÇA: Usando 'engine'
+        df = pd.read_sql_query(text("SELECT username, role, lojas_acesso FROM users"), con=engine)
         
-        # Converte o JSON de lojas em uma string legível
         def format_lojas(lojas_json):
             if not lojas_json:
                 return "Nenhuma"
@@ -42,114 +38,117 @@ def get_all_users_details():
         df.rename(columns={'username': 'Usuário', 'role': 'Role', 'lojas_acesso': 'Lojas'}, inplace=True)
         return df
         
-    except sqlite3.Error as e:
+    except Exception as e:
         st.error(f"Erro ao carregar usuários: {e}")
         return pd.DataFrame(columns=['Usuário', 'Role', 'Lojas'])
-    finally:
-        if conn:
-            conn.close()
 
-def add_new_user(username, password, role, lojas_acesso_list):
+# MUDANÇA: Adicionado 'engine'
+def add_new_user(engine, username, password, role, lojas_acesso_list):
     """Adiciona um novo usuário completo ao DB."""
-    conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        c = conn.cursor()
         hashed_password = make_hashes(password)
-        lojas_acesso_json = json.dumps(lojas_acesso_list) # Converte lista para JSON text
+        lojas_acesso_json = json.dumps(lojas_acesso_list)
         
-        # Salva em minúsculas
-        c.execute(
-            "INSERT INTO users (username, password, role, lojas_acesso, status_logado) VALUES (?, ?, ?, ?, ?)", 
-            (username.lower(), hashed_password, role, lojas_acesso_json, 'DESLOGADO')
-        )
-        conn.commit()
-        get_all_users_details.clear() # Limpa o cache
+        query = text("""
+            INSERT INTO users (username, password, role, lojas_acesso, status_logado) 
+            VALUES (:username, :password, :role, :lojas, :status)
+        """)
+        params = {
+            "username": username.lower(),
+            "password": hashed_password,
+            "role": role,
+            "lojas": lojas_acesso_json,
+            "status": 'DESLOGADO'
+        }
+        
+        # MUDANÇA: Usando 'engine.begin()' para transação
+        with engine.begin() as conn:
+            conn.execute(query, params)
+        
         return True
-    except sqlite3.IntegrityError:
-        st.error(f"Erro: Usuário '{username.lower()}' já existe.")
+    
+    except Exception as e:
+        # MUDANÇA: Verificação genérica de erro de integridade
+        if "unique constraint" in str(e) or "duplicate key" in str(e):
+            st.error(f"Erro: Usuário '{username.lower()}' já existe.")
+        else:
+            st.error(f"Erro ao adicionar usuário: {e}")
         return False
-    except sqlite3.Error as e:
-        st.error(f"Erro ao adicionar usuário: {e}")
-        return False
-    finally:
-        if conn:
-            conn.close()
 
-def delete_user(username):
+# MUDANÇA: Adicionado 'engine'
+def delete_user(engine, username):
     """Remove um usuário do DB."""
-    conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        c = conn.cursor()
-        # Deleta em minúsculas
-        c.execute("DELETE FROM users WHERE username=?", (username.lower(),))
-        conn.commit()
-        get_all_users_details.clear() # Limpa o cache
-        return c.rowcount > 0
-    except sqlite3.Error as e:
+        query = text("DELETE FROM users WHERE username = :username")
+        
+        with engine.begin() as conn:
+            result = conn.execute(query, {"username": username.lower()})
+            
+        return result.rowcount > 0
+    except Exception as e:
         st.error(f"Erro ao deletar usuário: {e}")
         return False
-    finally:
-        if conn:
-            conn.close()
 
-def update_user_permissions(username, role, lojas_acesso_list):
+# MUDANÇA: Adicionado 'engine'
+def update_user_permissions(engine, username, role, lojas_acesso_list):
     """Atualiza o role e as lojas de um usuário."""
-    conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        c = conn.cursor()
-        lojas_acesso_json = json.dumps(lojas_acesso_list) # Converte lista para JSON text
+        lojas_acesso_json = json.dumps(lojas_acesso_list)
         
-        # Atualiza em minúsculas
-        c.execute(
-            "UPDATE users SET role=?, lojas_acesso=? WHERE username=?", 
-            (role, lojas_acesso_json, username.lower())
-        )
-        conn.commit()
-        get_all_users_details.clear() # Limpa o cache
-        return c.rowcount > 0
-    except sqlite3.Error as e:
+        query = text("""
+            UPDATE users SET role = :role, lojas_acesso = :lojas 
+            WHERE username = :username
+        """)
+        params = {
+            "role": role,
+            "lojas": lojas_acesso_json,
+            "username": username.lower()
+        }
+        
+        with engine.begin() as conn:
+            result = conn.execute(query, params)
+            
+        return result.rowcount > 0
+    except Exception as e:
         st.error(f"Erro ao alterar permissões: {e}")
         return False
-    finally:
-        if conn:
-            conn.close()
 
-def update_user_password(username, new_password):
+# MUDANÇA: Adicionado 'engine'
+def update_user_password(engine, username, new_password):
     """Altera a senha de um usuário existente."""
-    conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        c = conn.cursor()
         hashed_password = make_hashes(new_password)
-        # Atualiza em minúsculas
-        c.execute("UPDATE users SET password=? WHERE username=?", (hashed_password, username.lower()))
-        conn.commit()
-        # Não precisa limpar cache aqui, pois a lista de usuários não muda
-        return c.rowcount > 0
-    except sqlite3.Error as e:
+        
+        query = text("UPDATE users SET password = :password WHERE username = :username")
+        params = {
+            "password": hashed_password,
+            "username": username.lower()
+        }
+        
+        with engine.begin() as conn:
+            result = conn.execute(query, params)
+            
+        return result.rowcount > 0
+    except Exception as e:
         st.error(f"Erro ao alterar senha: {e}")
         return False
-    finally:
-        if conn:
-            conn.close()
 
 # --- Lógica de Exibição da Página ---
 
-def show_admin_page():
+# MUDANÇA: Adicionado 'engine' e 'base_data_path'
+def show_admin_page(engine, base_data_path):
     """Cria a interface do painel de administração."""
     st.title("🛡️ Painel de Administração")
     st.markdown("Gerencie usuários, funções (roles) e acesso às lojas.")
     
     if st.button("🔄 Atualizar Lista de Usuários"):
-        get_all_users_details.clear()
+        # MUDANÇA: Removido 'clear()'
         st.rerun()
 
     # 1. VISUALIZAÇÃO DOS USUÁRIOS
     st.subheader("Usuários Cadastrados")
-    df_users = get_all_users_details()
+    # MUDANÇA: Passando 'engine'
+    df_users = get_all_users_details(engine)
     
     if df_users.empty:
         st.info("Nenhum usuário cadastrado.")
@@ -165,12 +164,10 @@ def show_admin_page():
     with tab1:
         st.subheader("Adicionar Novo Usuário")
         with st.form("add_user_form", clear_on_submit=True):
-            # Força minúsculas na entrada
             new_username = st.text_input("Novo Login (Username)", key="add_user").lower()
             new_password = st.text_input("Senha Inicial", type="password", key="add_pass")
             new_role = st.selectbox("Função (Role):", ROLES_DISPONIVEIS, index=0, key="add_role")
             
-            # Caixa de seleção para lojas
             new_lojas = st.multiselect(
                 "Quais lojas este usuário pode acessar? (Se for admin, pode deixar em branco)", 
                 LISTA_LOJAS, 
@@ -181,7 +178,8 @@ def show_admin_page():
                 if not (new_username and new_password):
                     st.warning("Preencha pelo menos o Login e a Senha.")
                 else:
-                    if add_new_user(new_username, new_password, new_role, new_lojas): # new_username já está minúsculo
+                    # MUDANÇA: Passando 'engine'
+                    if add_new_user(engine, new_username, new_password, new_role, new_lojas):
                         st.success(f"Usuário '{new_username}' criado com sucesso!")
                         st.rerun()
 
@@ -193,7 +191,6 @@ def show_admin_page():
             st.info("Nenhum usuário para gerenciar.")
         else:
             user_list = df_users['Usuário'].tolist()
-            # Remove o admin atual da lista (não pode editar a si mesmo aqui)
             current_admin = st.session_state.get('username', 'admin').lower()
             
             if current_admin in user_list:
@@ -202,18 +199,16 @@ def show_admin_page():
             user_to_manage = st.selectbox("Selecione o Usuário para gerenciar:", user_list, key="manage_user_select", index=None)
             
             if user_to_manage:
-                # Busca o estado atual do usuário
                 user_data = df_users[df_users['Usuário'] == user_to_manage].iloc[0]
                 current_role_index = ROLES_DISPONIVEIS.index(user_data['Role']) if user_data['Role'] in ROLES_DISPONIVEIS else 0
                 
-                # Tenta carregar as lojas atuais dele
                 try:
-                    # Precisamos buscar os dados brutos do DB, não os formatados
-                    conn = sqlite3.connect(DB_PATH, timeout=10)
-                    c = conn.cursor()
-                    c.execute("SELECT lojas_acesso FROM users WHERE username = ?", (user_to_manage.lower(),))
-                    lojas_json_raw = c.fetchone()
-                    conn.close()
+                    # MUDANÇA: Buscando o JSON de lojas com 'engine'
+                    with engine.connect() as conn:
+                        query = text("SELECT lojas_acesso FROM users WHERE username = :username")
+                        result = conn.execute(query, {"username": user_to_manage.lower()})
+                        lojas_json_raw = result.fetchone()
+                    
                     if lojas_json_raw and lojas_json_raw[0]:
                         current_lojas = json.loads(lojas_json_raw[0])
                     else:
@@ -240,7 +235,8 @@ def show_admin_page():
                     )
                     
                     if st.form_submit_button("Salvar Alterações de Acesso"):
-                        if update_user_permissions(user_to_manage, managed_role, managed_lojas): # user_to_manage já está minúsculo
+                        # MUDANÇA: Passando 'engine'
+                        if update_user_permissions(engine, user_to_manage, managed_role, managed_lojas):
                             st.success(f"Permissões de '{user_to_manage}' atualizadas!")
                             st.rerun()
                         else:
@@ -262,7 +258,8 @@ def show_admin_page():
                     
                     if st.form_submit_button("Confirmar Alteração de Senha"):
                         if new_pass:
-                            if update_user_password(user_to_update_pass, new_pass): # user_to_update_pass já está minúsculo
+                            # MUDANÇA: Passando 'engine'
+                            if update_user_password(engine, user_to_update_pass, new_pass):
                                 st.success(f"Senha do usuário '{user_to_update_pass}' alterada!")
                             else:
                                 st.error("Falha ao alterar senha.")
@@ -278,17 +275,17 @@ def show_admin_page():
             st.info("Nenhum usuário cadastrado.")
         else:
             user_list_del = df_users['Usuário'].tolist()
-            # Força minúsculas na verificação
             current_admin_del = st.session_state.get('username', 'admin').lower()
             
             if current_admin_del in user_list_del:
-                user_list_del.remove(current_admin_del) # Admin não pode se auto-excluir
+                user_list_del.remove(current_admin_del)
             
             user_to_delete = st.selectbox("Selecione o Usuário para Excluir:", user_list_del, key="delete_user_select", index=None)
 
             if user_to_delete:
                 if st.button(f"Confirmar Exclusão de {user_to_delete}", type="primary"):
-                    if delete_user(user_to_delete): # user_to_delete já está minúsculo
+                    # MUDANÇA: Passando 'engine'
+                    if delete_user(engine, user_to_delete):
                         st.success(f"Usuário '{user_to_delete}' excluído com sucesso!")
                         st.rerun()
                     else:
