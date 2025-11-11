@@ -1,15 +1,14 @@
 import streamlit as st
-# MUDANÇA: Removido sqlite3
-from sqlalchemy import text # MUDANÇA: Adicionado import text
+from sqlalchemy import text
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta  # MUDANÇA: Importado o timedelta
 
 # --- Funções de KPI ---
-# MUDANÇA: Removido @st.cache_data, adicionado 'engine'
+
+@st.cache_data(ttl=600) # Cache de 10 minutos
 def get_kpi_users(engine):
     """Busca o número total de usuários cadastrados."""
     try:
-        # MUDANÇA: Usando 'engine'
         with engine.connect() as conn:
             query = text("SELECT COUNT(username) as total FROM users")
             result = conn.execute(query)
@@ -19,32 +18,59 @@ def get_kpi_users(engine):
         st.error(f"Erro ao buscar KPI de usuários: {e}")
         return 0
 
+# =========================================================
+# MUDANÇA: NOVA FUNÇÃO PARA O GRÁFICO
+# =========================================================
+@st.cache_data(ttl=600) # Cache de 10 minutos
+def get_approved_orders_chart(engine):
+    """Busca o volume de pedidos aprovados nos últimos 30 dias."""
+    try:
+        # Define a data limite (30 dias atrás)
+        date_limit = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Query:
+        # 1. Filtra por 'Aprovado'
+        # 2. Filtra pela data de aprovação nos últimos 30 dias
+        # 3. Agrupa pelo DIA da aprovação
+        # 4. Soma o total de caixas (volume)
+        query = text("""
+            SELECT
+                CAST(data_aprovacao AS DATE) AS "Dia",
+                SUM(total_cx) AS "Volume (CX)"
+            FROM pedidos_consolidados
+            WHERE
+                status_aprovacao = 'Aprovado'
+                AND data_aprovacao >= :date_limit
+            GROUP BY
+                CAST(data_aprovacao AS DATE)
+            ORDER BY
+                "Dia" ASC
+        """)
+        
+        df = pd.read_sql_query(query, con=engine, params={"date_limit": date_limit})
+        
+        # Define o 'Dia' como índice para o gráfico de barras
+        if not df.empty:
+            df = df.set_index('Dia')
+            
+        return df
+    except Exception as e:
+        st.error(f"Erro ao buscar dados do gráfico: {e}")
+        return pd.DataFrame(columns=["Volume (CX)"])
+
+
 # --- Função Principal da Página ---
 
-# MUDANÇA: Adicionado 'engine' e 'base_data_path'
 def show_home_page(engine, base_data_path):
     """Cria a interface da página inicial."""
     
     # 1. Título e Boas-Vindas
     st.title(f"Bem-vindo(a), {st.session_state.get('username', 'Usuário')}!")
-    st.markdown("Este é o painel de controle do Sistema de Gestão de Estoque do CD (Informações atualizadas as 8:30hs de seg a sab).")
-    st.markdown("---")
-
-    # 2. KPIs (Métricas Principais)
-    st.subheader("Resumo do Sistema")
+    st.markdown("Este é o painel de controle do Sistema de Gestão de Estoque (WMS).")
     
-    # MUDANÇA: Passando 'engine'
-    st.metric(label="Total de Usuários Cadastrados", value=get_kpi_users(engine))
-        
-    st.markdown("---")
-
-    # 3. Atalhos Rápidos
+    # 2. MUDANÇA: Atalhos Rápidos (Movido para cima)
     st.subheader("Acesso Rápido")
     st.markdown("Selecione uma das opções abaixo para navegar:")
-
-    # --- MUDANÇA NA NAVEGAÇÃO ---
-    # Esta lógica agora define 'st.session_state.page', que usaremos no app.py
-    # para sincronizar a sidebar.
     
     lojas_do_usuario = st.session_state.get('lojas_acesso', [])
     
@@ -54,23 +80,39 @@ def show_home_page(engine, base_data_path):
         col1_nav, col2_nav = st.columns(2)
 
     with col1_nav:
-        # MUDANÇA: Define 'st.session_state.page' para o nome exato da página
         if st.button("🔎 Consultar Estoque CD", use_container_width=True):
             st.session_state['page'] = "Consulta de Estoque CD"
             st.rerun()
 
     with col2_nav:
-        # MUDANÇA: Botão agora aponta para o Histórico de Transferência
+        # Corrigido para apontar para o Histórico
         if st.button("📊 Ver Histórico de Transferência", use_container_width=True):
             st.session_state['page'] = "Histórico de Transferencia CD"
             st.rerun()
             
     if lojas_do_usuario:
         with col3_nav:
-            # MUDANÇA: Define 'st.session_state.page' para o nome exato da página
             if st.button("🛒 Digitar Pedidos", use_container_width=True, type="primary"):
                 st.session_state['page'] = "Digitar Pedidos"
                 st.rerun()
+    
+    st.markdown("---")
+    
+    # 3. MUDANÇA: KPIs (Movido para o meio)
+    st.subheader("Resumo do Sistema")
+    st.metric(label="Total de Usuários Cadastrados", value=get_kpi_users(engine))
+        
+    st.markdown("---")
 
-
+    # 4. MUDANÇA: Novo Gráfico de Pedidos Aprovados
+    st.subheader("📦 Volume de Pedidos Aprovados (Últimos 30 dias)")
+    
+    # Busca os dados
+    df_chart = get_approved_orders_chart(engine)
+    
+    if df_chart.empty:
+        st.info("Nenhum pedido aprovado encontrado nos últimos 30 dias.")
+    else:
+        # Desenha o gráfico de barras
+        st.bar_chart(df_chart)
 
