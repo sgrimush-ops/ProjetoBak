@@ -6,7 +6,7 @@ import os
 import re # Para limpar o número de telefone
 
 # --- Configurações Iniciais ---
-FILE_PATH = 'data/WMS.xlsm'
+# MUDANÇA: Removido FILE_PATH
 COLUNA_DESCRICAO = 'Produto' 
 COLUNA_CODIGO = 'codigo'
 
@@ -15,7 +15,7 @@ MESES_DISPONIVEIS = {
     "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4, "Maio": 5, "Junho": 6,
     "Julho": 7, "Agosto": 8, "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
 }
-# Mapeamento inverso para encontrar o nome do mês a partir do número
+# Mapeamento inverso
 MESES_INVERSO = {v: k for k, v in MESES_DISPONIVEIS.items()}
 
 
@@ -23,9 +23,9 @@ MESES_INVERSO = {v: k for k, v in MESES_DISPONIVEIS.items()}
 
 @st.cache_data
 def load_data(file_path: str) -> Optional[pd.DataFrame]:
-    """Carrega dados do arquivo Excel (sem quebra de cache por simplificação de análise)."""
+    """Carrega dados do arquivo Excel."""
     try:
-        # Use a aba correta (assumindo 'WMS' como no código anterior)
+        # Use a aba correta (assumindo 'WMS')
         return pd.read_excel(file_path, sheet_name='WMS')
     except Exception as e:
         st.error(f"Erro ao carregar o arquivo {file_path}. Verifique o caminho e a aba. Erro: {e}")
@@ -52,11 +52,17 @@ def preprocess_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 # --- Função Principal de Análise ---
 
-def show_ae_page():
+# MUDANÇA: Adicionado 'engine' e 'base_data_path'
+def show_ae_page(engine, base_data_path):
     st.title("📈 Evolução de Estoque Mensal")
 
-    df_raw = load_data(FILE_PATH)
+    # MUDANÇA: Definindo o caminho do arquivo dinamicamente
+    file_path = os.path.join(base_data_path, "WMS.xlsm")
+
+    # MUDANÇA: Usando o 'file_path' dinâmico
+    df_raw = load_data(file_path)
     if df_raw is None:
+        st.error(f"Arquivo 'WMS.xlsm' não encontrado em '{base_data_path}'. Faça o upload na página de Admin.")
         return
 
     df_processed = preprocess_data(df_raw)
@@ -68,25 +74,22 @@ def show_ae_page():
     ano_atual = hoje.year
     mes_atual_num = hoje.month
     
-    # Encontra o nome do mês atual (ex: "Novembro")
     mes_atual_nome = MESES_INVERSO.get(mes_atual_num, "Janeiro")
     
-    # Extrai anos únicos para o seletor
     anos_disponiveis = sorted(df_processed['datasalva'].dt.year.unique(), reverse=True)
     if ano_atual not in anos_disponiveis:
-        anos_disponiveis.insert(0, ano_atual) # Garante que o ano atual esteja na lista
+        anos_disponiveis.insert(0, ano_atual) 
 
-    # Encontra o índice (posição) do ano e mês atuais para usar como padrão
     try:
         index_ano = anos_disponiveis.index(ano_atual)
     except ValueError:
-        index_ano = 0 # Padrão é o primeiro da lista se o ano atual não for encontrado
+        index_ano = 0
         
     lista_meses_nomes = list(MESES_DISPONIVEIS.keys())
     try:
         index_mes = lista_meses_nomes.index(mes_atual_nome)
     except ValueError:
-        index_mes = 0 # Padrão é Janeiro
+        index_mes = 0
     # --- FIM DA LÓGICA DE DATA PADRÃO ---
 
     
@@ -95,14 +98,12 @@ def show_ae_page():
     col1, col2 = st.columns(2)
     
     with col1:
-        # Define o índice padrão para o ano atual
         ano_selecionado = st.selectbox(
             "Selecione o Ano", 
             anos_disponiveis, 
             index=index_ano
         )
     with col2:
-        # Define o índice padrão para o mês atual
         mes_selecionado = st.selectbox(
             "Selecione o Mês", 
             lista_meses_nomes, 
@@ -138,11 +139,9 @@ def show_ae_page():
         
         df_mensal['Display'] = df_mensal[COLUNA_DESCRICAO] + " (Código: " + df_mensal[COLUNA_CODIGO] + ")"
         
-        # Filtro de texto
         descricao_busca = st.text_input("Digite a descrição ou parte dela:")
         
         if descricao_busca:
-            # Filtra o dataframe com base na busca
             resultados_parciais = df_mensal[df_mensal[COLUNA_DESCRICAO].str.contains(descricao_busca, case=False, na=False)]
             opcoes_unicas = resultados_parciais.drop_duplicates(subset=[COLUNA_CODIGO])
             lista_opcoes = ["Selecione um item..."] + opcoes_unicas['Display'].tolist()
@@ -152,7 +151,6 @@ def show_ae_page():
         item_selecionado_display = st.selectbox("Selecione o produto na lista:", lista_opcoes)
         
         if item_selecionado_display and item_selecionado_display != "Selecione um item..." and item_selecionado_display != "Digite algo para buscar...":
-            # Extrai o código do texto (ex: "Produto (Código: 123)")
             try:
                 codigo_para_filtrar = int(re.search(r'\(Código: (\d+)\)', item_selecionado_display).group(1))
             except (AttributeError, ValueError):
@@ -182,7 +180,6 @@ def show_ae_page():
             estoque_item_dia = df_item.groupby('Data_Dia')['Qtd'].sum().reset_index()
             estoque_item_dia.columns = ['Data', 'Estoque Item']
             
-            # Exibe a descrição do produto
             descricao = df_item[COLUNA_DESCRICAO].iloc[0]
             st.subheader(f"Evolução: {descricao}")
             
@@ -192,17 +189,14 @@ def show_ae_page():
                 y='Estoque Item',
                 use_container_width=True
             )
-            # st.dataframe(estoque_item_dia.tail()) # Opcional: mostrar tabela
     
     else:
         # Se nenhum filtro for aplicado, mostra o estoque total
         st.subheader(f"Estoque Total - {mes_selecionado}/{ano_selecionado}")
         
-        # Agrupa por dia e soma a quantidade total
         estoque_total_dia = df_mensal.groupby('Data_Dia')['Qtd'].sum().reset_index()
         estoque_total_dia.columns = ['Data', 'Estoque Total']
 
-        # Mostra o gráfico da evolução total
         st.line_chart(
             estoque_total_dia,
             x='Data',
