@@ -8,6 +8,9 @@ REQ_FILE = "requirements.txt"
 
 
 def show_admin_tools():
+    if not st.session_state.get("is_admin", False):
+        st.error("❌ Acesso restrito: apenas administradores podem visualizar esta página.")
+        st.stop()
     st.title("🧰 Administração do Sistema")
     st.markdown("### Atualização de Dependências (requirements.txt)")
 
