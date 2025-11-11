@@ -6,10 +6,94 @@ import re
 import os
 import sqlalchemy
 from sqlalchemy import create_engine, text
+from db_setup import atualizar_estrutura_banco
+import sqlite3
+
+# Só importa psycopg2 se estiver no Render (PostgreSQL)
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
+
+
+def atualizar_estrutura_banco():
+    """Garante que a tabela pedidos_consolidados tenha todas as colunas certas."""
+    is_sqlite = os.path.exists("pedidos.db")
+
+    ddl_commands = [
+        """
+        CREATE TABLE IF NOT EXISTS pedidos_consolidados (
+            id SERIAL PRIMARY KEY
+        );
+        """,
+        # Campos principais
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS codigo TEXT;",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS produto TEXT;",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS ean TEXT;",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS embseparacao TEXT;",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS data_pedido TIMESTAMP;",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS data_aprovacao TIMESTAMP;",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS usuario_pedido TEXT;",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS status_item TEXT;",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS status_aprovacao TEXT DEFAULT 'Pendente';",
+        "ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS total_cx INTEGER DEFAULT 0;",
+    ]
+
+    # Campos das lojas
+    for i in [1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 17, 18]:
+        ddl_commands.append(
+            f"ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS loja_{i:03d} INTEGER DEFAULT 0;"
+        )
+
+    if is_sqlite:
+        # Banco local SQLite
+        conn = sqlite3.connect("pedidos.db")
+        cursor = conn.cursor()
+        for cmd in ddl_commands:
+            try:
+                # SQLite não aceita IF NOT EXISTS no ALTER TABLE
+                cursor.execute(cmd.replace(
+                    "SERIAL", "INTEGER").replace("IF NOT EXISTS", ""))
+            except Exception as e:
+                if "duplicate column name" not in str(e):
+                    print(f"⚠️ Erro SQLite executando: {cmd}\n{e}")
+        conn.commit()
+        conn.close()
+        print("✅ Estrutura SQLite atualizada com sucesso!")
+
+    else:
+        # Banco PostgreSQL (Render)
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            print("❌ Erro: variável DATABASE_URL não encontrada.")
+            return
+
+        if psycopg2 is None:
+            print(
+                "❌ psycopg2 não instalado. Adicione 'psycopg2-binary' ao requirements.txt.")
+            return
+
+        conn = psycopg2.connect(db_url)
+        cursor = conn.cursor()
+        for cmd in ddl_commands:
+            try:
+                cursor.execute(cmd)
+            except Exception as e:
+                print(f"⚠️ Erro PostgreSQL executando: {cmd}\n{e}")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✅ Estrutura PostgreSQL atualizada com sucesso!")
+
+
+# ✅ Chamada automática assim que o módulo carrega
+atualizar_estrutura_banco()
 
 # =========================================================
 #  CONEXÃO DINÂMICA COM O BANCO (SQLite local / PostgreSQL Render)
 # =========================================================
+
 
 def get_engine():
     """
@@ -24,6 +108,7 @@ def get_engine():
         # Ambiente local (usa o arquivo SQLite)
         local_path = "data/pedidos.db"
         return create_engine(f"sqlite:///{local_path}")
+
 
 # --- Caminhos ---
 MIX_FILE_PATH = 'data/__MixAtivoSistema.xlsx'
@@ -188,7 +273,8 @@ def get_recent_orders_display(username: str) -> pd.DataFrame:
                WHERE usuario_pedido = ? AND data_pedido >= ?
                ORDER BY data_pedido DESC"""
         engine = get_engine()
-        df = pd.read_sql_query(text(q), con=engine, params={"username": username, "dt_lim": dt_lim})
+        df = pd.read_sql_query(text(q), con=engine, params={
+                               "username": username, "dt_lim": dt_lim})
         df["Emb"] = pd.to_numeric(
             df["Emb"], errors='coerce').fillna(0).astype(int)
         return df
