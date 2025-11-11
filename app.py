@@ -15,6 +15,8 @@ from page.admin_maint import show_admin_page
 from page.historico import show_historico_page
 from page.pedidos import show_pedidos_page
 from page.aprovacao_pedidos import show_aprovacao_page
+from page.admin_tools import show_admin_tools
+
 
 # --- Configurações Globais ---
 # Define o caminho-base. No Render será /var/data, localmente será 'data'
@@ -33,10 +35,10 @@ COLUNAS_LOJAS_PEDIDO = [f"loja_{loja}" for loja in LISTA_LOJAS]
 # --- Mapeamento de Páginas Base (Visíveis para todos) ---
 PAGES = {
     "Home": show_home_page,
-    "Consulta de Estoque": show_consulta_page,
-    "Análise de Evolução": show_ae_page,
-    "Histórico de Solicitações": show_historico_page,
-    # Páginas de Pedidos e Admin são adicionadas dinamicamente
+    "Consulta de Estoque CD": show_consulta_page,
+    "Análise de Evolução Estoque CD": show_ae_page,
+    "Histórico de Transferencia CD": show_historico_page,
+    "Atualização de Dependências": show_admin_tools,
 }
 
 # A configuração da página deve ser a primeira chamada do Streamlit
