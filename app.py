@@ -60,6 +60,8 @@ PAGES = {
     # ⚙️ Exibe a página só se for admin:
     "Atualização de Dependências": show_admin_tools
     if st.session_state.get("is_admin", False)
+    if st.session_state.get("is_admin", False):
+    paginas_disponiveis["Resetar Banco"] = show_reset_db_page
     else None,
 }
 
