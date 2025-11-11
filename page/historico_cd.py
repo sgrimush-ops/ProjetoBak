@@ -4,17 +4,18 @@ from datetime import datetime
 from typing import Optional, Tuple
 import os
 import re
+import numpy as np # MUDANÇA: Necessário para a lógica condicional
 
 # --- Configurações Iniciais ---
-# (Os caminhos serão definidos na função principal)
 
-# --- Nomes das Colunas (Conforme sua descrição) ---
+# MUDANÇA: Adicionada a coluna 'Situacao' (assumindo o nome)
 COL_HIST_CODIGO = 'CODIGOINT'
 COL_HIST_EMBALAGEM = 'EmbSeparacao'
 COL_HIST_ESTOQUE_LOJA = 'EstCX'
 COL_HIST_PEDIDOS = 'PedCX'
 COL_HIST_DATA = 'DtSolicitacao'
 COL_HIST_DESCRICAO = 'Produto'
+COL_HIST_SITUACAO = 'Situacao' # MUDANÇA: Assumindo que este é o nome da coluna
 
 COL_WMS_CODIGO = 'codigo'
 COL_WMS_QTD = 'Qtd'
@@ -50,7 +51,6 @@ def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
         df['Codigo'] = df['Codigo'].astype(int)
         df['Qtd_CD'] = pd.to_numeric(df['Qtd_CD'], errors='coerce').fillna(0)
         
-        # MUDANÇA: Retorna o DataFrame completo, não apenas o último dia
         return df
         
     except Exception as e:
@@ -61,21 +61,25 @@ def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
 def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
     """Carrega dados do Histórico de Solicitações (Lojas)."""
     try:
+        # MUDANÇA: Adiciona COL_HIST_SITUACAO às colunas de leitura
         df = pd.read_excel(
             file_path,
             sheet_name=0, 
             usecols=[
                 COL_HIST_CODIGO, COL_HIST_DESCRICAO, COL_HIST_EMBALAGEM,
-                COL_HIST_ESTOQUE_LOJA, COL_HIST_PEDIDOS, COL_HIST_DATA
+                COL_HIST_ESTOQUE_LOJA, COL_HIST_PEDIDOS, COL_HIST_DATA,
+                COL_HIST_SITUACAO
             ]
         )
+        
         df.rename(columns={
             COL_HIST_CODIGO: 'Codigo',
             COL_HIST_DESCRICAO: 'Descricao',
             COL_HIST_EMBALAGEM: 'Embalagem',
             COL_HIST_ESTOQUE_LOJA: 'Estoque_Lojas',
             COL_HIST_PEDIDOS: 'Pedidos',
-            COL_HIST_DATA: 'Data'
+            COL_HIST_DATA: 'Data',
+            COL_HIST_SITUACAO: 'Situacao' # MUDANÇA
         }, inplace=True)
         
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
@@ -86,6 +90,9 @@ def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
         df['Estoque_Lojas'] = pd.to_numeric(df['Estoque_Lojas'], errors='coerce').fillna(0)
         df['Pedidos'] = pd.to_numeric(df['Pedidos'], errors='coerce').fillna(0)
         df['Embalagem'] = pd.to_numeric(df['Embalagem'], errors='coerce')
+        
+        # MUDANÇA: Garante que a coluna Situacao seja string para comparação
+        df['Situacao'] = df['Situacao'].astype(str).str.strip()
         
         return df
         
@@ -98,23 +105,19 @@ def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
 def show_historico_page(engine, base_data_path):
     st.title("📊 Histórico de Transferência (Completo)")
 
-    # --- Definir Caminhos e Carregar Dados ---
     hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
     wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
 
     df_hist_full = load_hist_data(hist_file_path)
-    df_wms_full = load_wms_data(wms_file_path) # MUDANÇA: Carrega o WMS completo
+    df_wms_full = load_wms_data(wms_file_path)
 
     if df_hist_full is None or df_wms_full is None:
         st.error("Falha ao carregar um ou mais arquivos de dados. Verifique os uploads.")
         return
 
-    # --- Criar Mapa de Embalagens ---
-    # Usamos isso para converter o estoque do CD de Unidades para Caixas
     embalagem_map = df_hist_full[df_hist_full['Embalagem'] > 0][['Codigo', 'Embalagem']]
     embalagem_map = embalagem_map.drop_duplicates(subset=['Codigo']).set_index('Codigo')
 
-    # --- Lógica de Data Padrão ---
     default_date = df_hist_full['Data'].max()
     if pd.isna(default_date):
         st.error("Não foi possível encontrar uma data válida no arquivo histórico.")
@@ -132,7 +135,6 @@ def show_historico_page(engine, base_data_path):
     try: index_mes = lista_meses_nomes.index(mes_atual_nome)
     except ValueError: index_mes = 0
 
-    # --- Seletores de Data ---
     st.subheader("Selecione o Período")
     col1, col2 = st.columns(2)
     with col1:
@@ -142,7 +144,6 @@ def show_historico_page(engine, base_data_path):
     
     mes_num = MESES_DISPONIVEIS[mes_selecionado]
 
-    # --- Filtrar AMBOS os DataFrames pelo período ---
     df_hist_mensal = df_hist_full[
         (df_hist_full['Data'].dt.year == ano_selecionado) &
         (df_hist_full['Data'].dt.month == mes_num)
@@ -158,7 +159,6 @@ def show_historico_page(engine, base_data_path):
 
     st.markdown("---")
 
-    # --- Filtro por Produto ---
     st.subheader("Filtro por Produto (Opcional)")
     tab1, tab2 = st.tabs(["Buscar por Descrição", "Buscar por Código"])
     
@@ -189,7 +189,6 @@ def show_historico_page(engine, base_data_path):
         if codigo_busca_direta:
             try:
                 codigo_para_filtrar = int(codigo_busca_direta)
-                # Pega o nome do item para o título
                 nome_item = df_hist_full[df_hist_full['Codigo'] == codigo_para_filtrar]['Descricao'].iloc[0]
                 item_selecionado_display = f"{nome_item} (Código: {codigo_para_filtrar})"
             except (ValueError, IndexError):
@@ -200,14 +199,21 @@ def show_historico_page(engine, base_data_path):
     # --- PREPARAÇÃO DOS DADOS PARA O GRÁFICO ---
     
     if codigo_para_filtrar:
-        # 1. ANÁLISE POR ITEM
         st.subheader(f"Análise: {item_selecionado_display}")
         
         # --- Lógica do Histórico (Lojas/Pedidos) ---
-        df_item_hist = df_hist_mensal[df_hist_mensal['Codigo'] == codigo_para_filtrar]
+        df_item_hist = df_hist_mensal[df_hist_mensal['Codigo'] == codigo_para_filtrar].copy()
+        
+        # MUDANÇA: Criar coluna para Não Atendidos (Pedidos *onde* Situacao == 7)
+        # Usamos a coluna 'Pedidos' (PedCX) como a quantidade
+        df_item_hist['Nao_Atendido_Qtde'] = np.where(
+            df_item_hist['Situacao'] == '7', df_item_hist['Pedidos'], 0
+        )
+        
         df_lojas_grafico = df_item_hist.groupby(df_item_hist['Data'].dt.date).agg(
             Pedidos_Item=('Pedidos', 'sum'),
-            Estoque_Lojas_Item=('Estoque_Lojas', 'sum')
+            Estoque_Lojas_Item=('Estoque_Lojas', 'sum'),
+            Nao_Atendido_Item=('Nao_Atendido_Qtde', 'sum') # MUDANÇA: Agrega a nova coluna
         ).reset_index().rename(columns={'Data': 'Dia'})
 
         # --- Lógica do WMS (Estoque CD) ---
@@ -216,13 +222,12 @@ def show_historico_page(engine, base_data_path):
             Estoque_CD_Unidades=('Qtd_CD', 'sum')
         ).reset_index().rename(columns={'Data': 'Dia'})
 
-        # Converter CD para Caixas
         try:
             embalagem = embalagem_map.loc[codigo_para_filtrar, 'Embalagem']
             if pd.notna(embalagem) and embalagem > 0:
                 df_cd_grafico['Estoque_CD_Item'] = df_cd_grafico['Estoque_CD_Unidades'] / embalagem
             else:
-                df_cd_grafico['Estoque_CD_Item'] = 0 # Embalagem não encontrada ou é 0
+                df_cd_grafico['Estoque_CD_Item'] = 0
         except KeyError:
             st.warning(f"Não foi encontrada embalagem para o código {codigo_para_filtrar}. Estoque CD será 0.")
             df_cd_grafico['Estoque_CD_Item'] = 0
@@ -233,34 +238,73 @@ def show_historico_page(engine, base_data_path):
             df_final_grafico = pd.merge(df_lojas_grafico, df_cd_grafico, on='Dia', how='outer')
         else:
             df_final_grafico = df_lojas_grafico.copy()
-            df_final_grafico['Estoque_CD_Item'] = 0 # Nenhum dado de WMS para este item/mês
+            df_final_grafico['Estoque_CD_Item'] = 0
             
-        df_final_grafico = df_final_grafico.set_index('Dia')
-        
+        # MUDANÇA (CORREÇÃO DO BUG): Remover .set_index('Dia')
+        # O DataFrame final (df_final_grafico) agora mantém 'Dia' como uma coluna.
+
     else:
-        # 2. ANÁLISE TOTAL (Lógica simplificada, pode não ser 100% precisa sem item)
+        # 2. ANÁLISE TOTAL
         st.subheader(f"Análise Total - {mes_selecionado}/{ano_selecionado}")
         
+        # MUDANÇA: Criar coluna para Não Atendidos (Total)
+        df_hist_mensal['Nao_Atendido_Qtde'] = np.where(
+            df_hist_mensal['Situacao'] == '7', df_hist_mensal['Pedidos'], 0
+        )
+        
+        # MUDANÇA: Agrega a nova coluna
         df_final_grafico = df_hist_mensal.groupby(df_hist_mensal['Data'].dt.date).agg(
             Total_Pedidos=('Pedidos', 'sum'),
-            Total_Estoque_Lojas=('Estoque_Lojas', 'sum')
+            Total_Estoque_Lojas=('Estoque_Lojas', 'sum'),
+            Total_Nao_Atendido=('Nao_Atendido_Qtde', 'sum')
         ).reset_index().rename(columns={'Data': 'Dia'})
+        # (O .set_index('Dia') já tinha sido removido daqui)
         
-        st.info("Selecione um item para ver a análise completa (incluindo Estoque CD).")
+        st.info("Estoque CD não é calculado na visão total. Selecione um item.")
 
     # Exibe o gráfico de linhas
     if not df_final_grafico.empty:
+        
+        # MUDANÇA: Define as colunas a serem exibidas e suas cores
+        colunas_y = []
+        cores_hex = []
+        
+        if 'Estoque_CD_Item' in df_final_grafico.columns:
+            colunas_y.append('Estoque_CD_Item')
+            cores_hex.append('#0000FF') # Azul
+        elif 'Total_Estoque_CD' in df_final_grafico.columns: # Caso de uso futuro
+             colunas_y.append('Total_Estoque_CD')
+             cores_hex.append('#0000FF') # Azul
+            
+        if 'Estoque_Lojas_Item' in df_final_grafico.columns:
+            colunas_y.append('Estoque_Lojas_Item')
+            cores_hex.append('#FFA500') # Laranja
+        elif 'Total_Estoque_Lojas' in df_final_grafico.columns:
+             colunas_y.append('Total_Estoque_Lojas')
+             cores_hex.append('#FFA500') # Laranja
+
+        if 'Pedidos_Item' in df_final_grafico.columns:
+            colunas_y.append('Pedidos_Item')
+            cores_hex.append('#008000') # Verde
+        elif 'Total_Pedidos' in df_final_grafico.columns:
+            colunas_y.append('Total_Pedidos')
+            cores_hex.append('#008000') # Verde
+            
+        if 'Nao_Atendido_Item' in df_final_grafico.columns:
+            colunas_y.append('Nao_Atendido_Item')
+            cores_hex.append('#FF0000') # Vermelho
+        elif 'Total_Nao_Atendido' in df_final_grafico.columns:
+            colunas_y.append('Total_Nao_Atendido')
+            cores_hex.append('#FF0000') # Vermelho
+            
         st.line_chart(
             df_final_grafico,
-            x='Dia',
-            y=['Estoque_CD_Item', 'Estoque_Lojas_Item', 'Pedidos_Item'], # Reordenado para cor
-            color=["#0000FF", "#FFA500", "#008000"], # MUDANÇA: Azul, Laranja, Verde para Pedidos_Item
-            use_container_width=True
+            x='Dia', # MUDANÇA: 'Dia' agora é uma coluna
+            y=colunas_y,
+            color=cores_hex
         )
         
         with st.expander("Ver dados da tabela"):
             st.dataframe(df_final_grafico)
     else:
         st.warning("Nenhum dado encontrado para exibir no gráfico.")
-
-
