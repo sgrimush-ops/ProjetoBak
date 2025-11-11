@@ -6,6 +6,7 @@ import json
 import os
 import sqlalchemy
 from sqlalchemy import create_engine, text
+import sqlite3
 
 # =========================================================
 #  CONEXÃO DINÂMICA COM O BANCO (SQLite local / PostgreSQL Render)
@@ -377,3 +378,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
