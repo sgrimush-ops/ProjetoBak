@@ -3,15 +3,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import json
 import re
-import os
-# MUDANÇA: Removido sqlite3 e psycopg2.
+import os # Necessário para os.path.join
 from sqlalchemy import create_engine, text
-
-# MUDANÇA: Removida a função 'atualizar_estrutura_banco()'.
-# Isso agora é feito centralizadamente no 'app.py'.
-
-# MUDANÇA: Removida a função 'get_engine()'.
-# O engine será passado como argumento para as funções.
 
 # =========================================================
 #  🧩 CONSTANTES E MAPEAMENTOS
@@ -184,17 +177,22 @@ def get_recent_orders_display(engine, username: str) -> pd.DataFrame:
 #  🧭 INTERFACE PRINCIPAL
 # =========================================================
 
-# MUDANÇA: A função agora recebe 'engine' como argumento.
-def show_pedidos_page(engine):
+# MUDANÇA: A função agora recebe 'engine' e 'base_data_path'
+def show_pedidos_page(engine, base_data_path):
     st.title("🛒 Digitação de Pedidos")
 
     if 'pedido_atual' not in st.session_state:
         st.session_state.pedido_atual = []
 
-    # MUDANÇA: Passando 'engine' para as funções que precisam dele.
-    df_mix = load_mix_data(MIX_FILE_PATH)
-    df_hist = load_historico_data(HIST_FILE_PATH)
-    df_wms = load_wms_data(WMS_FILE_PATH)
+    # MUDANÇA: Definir os caminhos completos usando o base_data_path
+    mix_file_path = os.path.join(base_data_path, "__MixAtivoSistema.xlsx")
+    hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
+    wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
+
+    # MUDANÇA: Passando os caminhos corretos para as funções de load
+    df_mix = load_mix_data(mix_file_path)
+    df_hist = load_historico_data(hist_file_path)
+    df_wms = load_wms_data(wms_file_path)
 
     if df_mix.empty:
         st.warning("Falha ao carregar o Mix de Produtos.")
@@ -302,3 +300,4 @@ def show_pedidos_page(engine):
         st.dataframe(df_rec, hide_index=True, use_container_width=True)
     else:
         st.info("Sem pedidos recentes.")
+
