@@ -4,109 +4,24 @@ from datetime import datetime, timedelta
 import json
 import re
 import os
-import sqlite3
+# MUDANÇA: Removido sqlite3 e psycopg2.
 from sqlalchemy import create_engine, text
 
-# --- Tenta importar psycopg2 (Render usa PostgreSQL) ---
-try:
-    import psycopg2
-except ImportError:
-    psycopg2 = None
+# MUDANÇA: Removida a função 'atualizar_estrutura_banco()'.
+# Isso agora é feito centralizadamente no 'app.py'.
 
-# =========================================================
-#  🔧 FUNÇÃO AUTOMÁTICA DE CONFIGURAÇÃO DO BANCO
-# =========================================================
-
-
-def atualizar_estrutura_banco():
-    """Garante que a tabela pedidos_consolidados tenha todas as colunas corretas."""
-
-    is_sqlite = os.path.exists("data/pedidos.db")
-
-    ddl_base = [
-        """
-        CREATE TABLE IF NOT EXISTS pedidos_consolidados (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT,
-            produto TEXT,
-            ean TEXT,
-            embseparacao INTEGER DEFAULT 0,
-            data_pedido TIMESTAMP,
-            data_aprovacao TIMESTAMP,
-            usuario_pedido TEXT,
-            status_item TEXT,
-            status_aprovacao TEXT DEFAULT 'Pendente',
-            total_cx INTEGER DEFAULT 0
-        );
-        """
-    ]
-
-    # Colunas das lojas (001 a 018, com saltos)
-    lojas = ["001", "002", "003", "004", "005", "006", "007",
-             "008", "011", "012", "013", "014", "017", "018"]
-    for loja in lojas:
-        ddl_base.append(
-            f"ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS loja_{loja} INTEGER DEFAULT 0;")
-
-    # Executa os comandos no banco
-    if is_sqlite:
-        conn = sqlite3.connect("data/pedidos.db")
-        cur = conn.cursor()
-        for cmd in ddl_base:
-            try:
-                cur.execute(cmd.replace("IF NOT EXISTS", ""))
-            except Exception as e:
-                if "duplicate column name" not in str(e):
-                    print(f"⚠️ Erro SQLite executando: {cmd}\n{e}")
-        conn.commit()
-        conn.close()
-        print("✅ Estrutura SQLite atualizada com sucesso!")
-    else:
-        db_url = os.getenv("DATABASE_URL")
-        if not db_url:
-            print("❌ Variável DATABASE_URL não encontrada.")
-            return
-        if psycopg2 is None:
-            print(
-                "❌ psycopg2 não instalado. Adicione 'psycopg2-binary' no requirements.txt.")
-            return
-
-        conn = psycopg2.connect(db_url)
-        cur = conn.cursor()
-        for cmd in ddl_base:
-            try:
-                cur.execute(cmd)
-            except Exception as e:
-                print(f"⚠️ Erro PostgreSQL executando: {cmd}\n{e}")
-        conn.commit()
-        cur.close()
-        conn.close()
-        print("✅ Estrutura PostgreSQL atualizada com sucesso!")
-
-
-# Executa a atualização automática
-atualizar_estrutura_banco()
-
-# =========================================================
-#  ⚙️ CONEXÃO DINÂMICA (LOCAL / RENDER)
-# =========================================================
-
-
-def get_engine():
-    db_url = os.getenv("DATABASE_URL")
-    if db_url:
-        return create_engine(db_url, connect_args={'sslmode': 'require'})
-    else:
-        return create_engine("sqlite:///data/pedidos.db")
-
+# MUDANÇA: Removida a função 'get_engine()'.
+# O engine será passado como argumento para as funções.
 
 # =========================================================
 #  🧩 CONSTANTES E MAPEAMENTOS
 # =========================================================
+# ATENÇÃO: Estes caminhos de arquivos locais podem falhar no Render.
+# Discutiremos isso na próxima seção.
 MIX_FILE_PATH = 'data/__MixAtivoSistema.xlsx'
 HIST_FILE_PATH = 'data/historico_solic.xlsm'
 WMS_FILE_PATH = 'data/WMS.xlsm'
-PEDIDOS_DB_PATH = 'data/pedidos.db'
+# MUDANÇA: Removido PEDIDOS_DB_PATH
 
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006",
                "007", "008", "011", "012", "013", "014", "017", "018"]
@@ -127,7 +42,7 @@ COLS_MIX_MAP = {
 #  📂 FUNÇÕES DE LEITURA DE DADOS
 # =========================================================
 
-
+# Esta função permanece igual, mas ATENÇÃO ao caminho do arquivo.
 def load_mix_data(file_path: str):
     try:
         df = pd.read_excel(file_path, dtype=str)
@@ -145,7 +60,7 @@ def load_mix_data(file_path: str):
         st.error(f"Erro ao carregar Mix: {e}")
         return pd.DataFrame()
 
-
+# Esta função permanece igual, mas ATENÇÃO ao caminho do arquivo.
 def load_historico_data(file_path: str):
     try:
         df = pd.read_excel(file_path, dtype=str)
@@ -165,7 +80,7 @@ def load_historico_data(file_path: str):
         st.error(f"Erro ao carregar Histórico: {e}")
         return pd.DataFrame()
 
-
+# Esta função permanece igual, mas ATENÇÃO ao caminho do arquivo.
 def load_wms_data(file_path: str):
     try:
         df = pd.read_excel(file_path, sheet_name='WMS', usecols=[
@@ -184,39 +99,52 @@ def load_wms_data(file_path: str):
 #  💾 SALVAR PEDIDO NO BANCO
 # =========================================================
 
-
-def save_order_to_db(pedido_final: list[dict]):
+# MUDANÇA: A função agora recebe 'engine' como argumento.
+# MUDANÇA: A query usa parâmetros nomeados (ex: :codigo) em vez de '?'
+def save_order_to_db(engine, pedido_final: list[dict]):
     try:
-        engine = get_engine()
-        conn = engine.raw_connection()
-        c = conn.cursor()
-
-        data_pedido = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        data_pedido = datetime.now() # MUDANÇA: Passar como objeto datetime
         usuario = st.session_state.get('username', 'desconhecido')
-        placeholders = ", ".join(["?"] * len(LISTA_LOJAS))
         cols_lojas = ", ".join([f"loja_{l}" for l in LISTA_LOJAS])
+        params_lojas = ", ".join([f":loja_{l}" for l in LISTA_LOJAS])
 
-        query = f"""
+        query = text(f"""
             INSERT INTO pedidos_consolidados (
                 codigo, produto, ean, embseparacao,
                 data_pedido, data_aprovacao, usuario_pedido,
                 status_item, {cols_lojas}, total_cx, status_aprovacao
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, {placeholders}, ?, ?)
-        """
+            ) VALUES (
+                :codigo, :produto, :ean, :embseparacao,
+                :data_pedido, :data_aprovacao, :usuario_pedido,
+                :status_item, {params_lojas}, :total_cx, :status_aprovacao
+            )
+        """)
 
+        params_list = []
         for item in pedido_final:
-            vals_lojas = [item.get(f"loja_{l}", 0) for l in LISTA_LOJAS]
+            vals_lojas = {f"loja_{l}": item.get(
+                f"loja_{l}", 0) for l in LISTA_LOJAS}
             emb_val = int(pd.to_numeric(
                 item.get("embseparacao", 0), errors="coerce") or 0)
-            params = (
-                item["Codigo"], item["Produto"], item["EAN"], emb_val,
-                data_pedido, None, usuario, item["Status"],
-                *vals_lojas, item["Total_CX"], "Pendente"
-            )
-            c.execute(query, params)
+            
+            params_list.append({
+                "codigo": item["Codigo"],
+                "produto": item["Produto"],
+                "ean": item["EAN"],
+                "embseparacao": emb_val,
+                "data_pedido": data_pedido,
+                "data_aprovacao": None,
+                "usuario_pedido": usuario,
+                "status_item": item["Status"],
+                **vals_lojas,
+                "total_cx": item["Total_CX"],
+                "status_aprovacao": "Pendente"
+            })
 
-        conn.commit()
-        conn.close()
+        # MUDANÇA: Usando 'engine.begin()' para executar em uma transação
+        with engine.begin() as conn:
+            conn.execute(query, params_list)
+        
         return True
     except Exception as e:
         st.error(f"Erro ao salvar: {e}")
@@ -226,11 +154,11 @@ def save_order_to_db(pedido_final: list[dict]):
 #  📊 HISTÓRICO DE PEDIDOS
 # =========================================================
 
-
-@st.cache_data(ttl=60)
-def get_recent_orders_display(username: str) -> pd.DataFrame:
+# MUDANÇA: Removido @st.cache_data (ele não pode "hashear" o argumento engine)
+# MUDANÇA: A função agora recebe 'engine' como argumento.
+def get_recent_orders_display(engine, username: str) -> pd.DataFrame:
     try:
-        engine = get_engine()
+        # MUDANÇA: Removido 'engine = get_engine()'
         dt_lim = (datetime.now() - timedelta(days=3)
                   ).strftime('%Y-%m-%d 00:00:00')
         q = text("""
@@ -256,13 +184,14 @@ def get_recent_orders_display(username: str) -> pd.DataFrame:
 #  🧭 INTERFACE PRINCIPAL
 # =========================================================
 
-
-def show_pedidos_page():
+# MUDANÇA: A função agora recebe 'engine' como argumento.
+def show_pedidos_page(engine):
     st.title("🛒 Digitação de Pedidos")
 
     if 'pedido_atual' not in st.session_state:
         st.session_state.pedido_atual = []
 
+    # MUDANÇA: Passando 'engine' para as funções que precisam dele.
     df_mix = load_mix_data(MIX_FILE_PATH)
     df_hist = load_historico_data(HIST_FILE_PATH)
     df_wms = load_wms_data(WMS_FILE_PATH)
@@ -351,10 +280,11 @@ def show_pedidos_page():
         st.dataframe(df_ped, hide_index=True, use_container_width=True)
         c1, c2 = st.columns(2)
         if c1.button("Salvar Pedido", type="primary"):
-            if save_order_to_db(st.session_state.pedido_atual):
+            # MUDANÇA: Passando 'engine' para a função de salvar
+            if save_order_to_db(engine, st.session_state.pedido_atual):
                 st.success("Salvo com sucesso!")
                 st.session_state.pedido_atual = []
-                get_recent_orders_display.clear()
+                # MUDANÇA: Removido 'get_recent_orders_display.clear()'
                 st.rerun()
             else:
                 st.error("Erro ao salvar.")
@@ -366,7 +296,8 @@ def show_pedidos_page():
 
     st.markdown("---")
     st.subheader("4. Histórico Recente")
-    df_rec = get_recent_orders_display(st.session_state.get('username', ''))
+    # MUDANÇA: Passando 'engine' para a função de histórico
+    df_rec = get_recent_orders_display(engine, st.session_state.get('username', ''))
     if not df_rec.empty:
         st.dataframe(df_rec, hide_index=True, use_container_width=True)
     else:
