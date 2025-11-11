@@ -1,10 +1,29 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-import sqlite3
 import json
 import re
 import os
+import sqlalchemy
+from sqlalchemy import create_engine, text
+
+# =========================================================
+#  CONEXÃO DINÂMICA COM O BANCO (SQLite local / PostgreSQL Render)
+# =========================================================
+
+def get_engine():
+    """
+    Cria o engine do SQLAlchemy, alternando entre SQLite (local) e PostgreSQL (Render).
+    """
+    db_url = os.getenv("DATABASE_URL")
+
+    if db_url:
+        # Caso o app esteja no Render (usa variável de ambiente)
+        return create_engine(db_url, connect_args={'sslmode': 'require'})
+    else:
+        # Ambiente local (usa o arquivo SQLite)
+        local_path = "data/pedidos.db"
+        return create_engine(f"sqlite:///{local_path}")
 
 # --- Caminhos ---
 MIX_FILE_PATH = 'data/__MixAtivoSistema.xlsx'
@@ -102,7 +121,9 @@ def load_wms_data(file_path: str):
 def save_order_to_db(pedido_final: list[dict]):
     conn = None
     try:
-        conn = sqlite3.connect(PEDIDOS_DB_PATH, timeout=10)
+        engine = get_engine()
+        conn = engine.raw_connection()
+
         c = conn.cursor()
 
         data_pedido = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -166,7 +187,8 @@ def get_recent_orders_display(username: str) -> pd.DataFrame:
                FROM pedidos_consolidados
                WHERE usuario_pedido = ? AND data_pedido >= ?
                ORDER BY data_pedido DESC"""
-        df = pd.read_sql_query(q, conn, params=(username, dt_lim))
+        engine = get_engine()
+        df = pd.read_sql_query(text(q), con=engine, params={"username": username, "dt_lim": dt_lim})
         df["Emb"] = pd.to_numeric(
             df["Emb"], errors='coerce').fillna(0).astype(int)
         return df
