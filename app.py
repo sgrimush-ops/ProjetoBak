@@ -1,10 +1,29 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import hashlib
 from datetime import datetime, timedelta
 import json
 import os
+import sqlalchemy
+from sqlalchemy import create_engine, text
+
+# =========================================================
+#  CONEXÃO DINÂMICA COM O BANCO (SQLite local / PostgreSQL Render)
+# =========================================================
+
+def get_engine():
+    """
+    Cria o engine do SQLAlchemy, alternando entre SQLite (local) e PostgreSQL (Render).
+    """
+    db_url = os.getenv("DATABASE_URL")
+
+    if db_url:
+        # Caso o app esteja no Render (usa variável de ambiente)
+        return create_engine(db_url, connect_args={'sslmode': 'require'})
+    else:
+        # Ambiente local (usa o arquivo SQLite)
+        local_path = "data/pedidos.db"
+        return create_engine(f"sqlite:///{local_path}")
 
 # --- Importa as Páginas ---
 from page.home import show_home_page
@@ -38,7 +57,10 @@ PAGES = {
     "Consulta de Estoque CD": show_consulta_page,
     "Análise de Evolução Estoque CD": show_ae_page,
     "Histórico de Transferencia CD": show_historico_page,
-    "Atualização de Dependências": show_admin_tools,
+    # ⚙️ Exibe a página só se for admin:
+    "Atualização de Dependências": show_admin_tools
+    if st.session_state.get("is_admin", False)
+    else None,
 }
 
 # A configuração da página deve ser a primeira chamada do Streamlit
