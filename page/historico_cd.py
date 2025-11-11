@@ -244,7 +244,7 @@ def show_historico_page(engine, base_data_path):
         df_final_grafico = df_hist_mensal.groupby(df_hist_mensal['Data'].dt.date).agg(
             Total_Pedidos=('Pedidos', 'sum'),
             Total_Estoque_Lojas=('Estoque_Lojas', 'sum')
-        ).reset_index().rename(columns={'Data': 'Dia'}).set_index('Dia')
+        ).reset_index().rename(columns={'Data': 'Dia'})
         
         st.info("Selecione um item para ver a análise completa (incluindo Estoque CD).")
 
@@ -262,4 +262,5 @@ def show_historico_page(engine, base_data_path):
             st.dataframe(df_final_grafico)
     else:
         st.warning("Nenhum dado encontrado para exibir no gráfico.")
+
 
