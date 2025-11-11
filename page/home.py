@@ -4,10 +4,7 @@ from sqlalchemy import text # MUDANÇA: Adicionado import text
 import pandas as pd
 from datetime import datetime
 
-# MUDANÇA: Removido DB_PATH
-
 # --- Funções de KPI ---
-
 # MUDANÇA: Removido @st.cache_data, adicionado 'engine'
 def get_kpi_users(engine):
     """Busca o número total de usuários cadastrados."""
@@ -30,7 +27,7 @@ def show_home_page(engine, base_data_path):
     
     # 1. Título e Boas-Vindas
     st.title(f"Bem-vindo(a), {st.session_state.get('username', 'Usuário')}!")
-    st.markdown("Este é o painel de controle do Sistema de Gestão de Estoque (WMS).")
+    st.markdown("Este é o painel de controle do Sistema de Gestão de Estoque do CD (Informações atualizadas as 8:30hs de seg a sab).")
     st.markdown("---")
 
     # 2. KPIs (Métricas Principais)
@@ -74,4 +71,5 @@ def show_home_page(engine, base_data_path):
             if st.button("🛒 Digitar Pedidos", use_container_width=True, type="primary"):
                 st.session_state['page'] = "Digitar Pedidos"
                 st.rerun()
+
 
