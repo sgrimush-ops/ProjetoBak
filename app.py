@@ -10,7 +10,6 @@ from sqlalchemy import create_engine, text  # MUDANÇA: Importado 'text'
 # --- Importa as páginas ---
 from page.home import show_home_page
 from page.consulta_estoq_cd import show_consulta_page   # MUDANÇA
-from page.analise_estoq_cd import show_ae_page         # MUDANÇA
 from page.historico_cd import show_historico_page      # MUDANÇA
 from page.pedidos import show_pedidos_page
 from page.aprovacao_pedidos import show_aprovacao_page
@@ -232,7 +231,6 @@ def main():
     paginas_disponiveis = {
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
-        "Análise de Evolução Estoque CD": show_ae_page,
         "Histórico de Transferencia CD": show_historico_page,
     }
 
@@ -273,3 +271,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
