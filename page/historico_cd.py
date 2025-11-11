@@ -3,32 +3,27 @@ import pandas as pd
 from datetime import datetime
 from typing import Optional, Tuple
 import os
-import re # Para a limpeza de strings na busca
+import re
 
 # --- Configurações Iniciais ---
-# MUDANÇA: Removidos HIST_FILE_PATH e WMS_FILE_PATH
-# Os caminhos serão gerados dinamicamente.
+# (Os caminhos serão definidos na função principal)
 
 # --- Nomes das Colunas (Conforme sua descrição) ---
-# Arquivo 'historico_solic.xlsm'
-COL_HIST_CODIGO = 'CODIGOINT' # Coluna A
-COL_HIST_EMBALAGEM = 'EmbSeparacao' # Coluna E
-COL_HIST_ESTOQUE_LOJA = 'EstCX' # Coluna G
-COL_HIST_PEDIDOS = 'PedCX' # Coluna H
-COL_HIST_DATA = 'DtSolicitacao' # Coluna R
-COL_HIST_DESCRICAO = 'Produto' # <-- CORRIGIDO
+COL_HIST_CODIGO = 'CODIGOINT'
+COL_HIST_EMBALAGEM = 'EmbSeparacao'
+COL_HIST_ESTOQUE_LOJA = 'EstCX'
+COL_HIST_PEDIDOS = 'PedCX'
+COL_HIST_DATA = 'DtSolicitacao'
+COL_HIST_DESCRICAO = 'Produto'
 
-# Arquivo 'WMS.xlsm'
-COL_WMS_CODIGO = 'codigo' # Coluna A
-COL_WMS_QTD = 'Qtd' # Coluna E
-COL_WMS_DATA = 'datasalva' # Coluna I
+COL_WMS_CODIGO = 'codigo'
+COL_WMS_QTD = 'Qtd'
+COL_WMS_DATA = 'datasalva'
 
-# Lista de meses para o seletor
 MESES_DISPONIVEIS = {
     "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4, "Maio": 5, "Junho": 6,
     "Julho": 7, "Agosto": 8, "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
 }
-# Mapeamento inverso para encontrar o nome do mês a partir do número
 MESES_INVERSO = {v: k for k, v in MESES_DISPONIVEIS.items()}
 
 
@@ -36,16 +31,13 @@ MESES_INVERSO = {v: k for k, v in MESES_DISPONIVEIS.items()}
 
 @st.cache_data
 def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
-    """Carrega dados do WMS (estoque do CD)."""
+    """Carrega DADOS COMPLETOS do WMS (estoque do CD)."""
     try:
-        # Carrega apenas as colunas necessárias
         df = pd.read_excel(
             file_path,
             sheet_name='WMS',
             usecols=[COL_WMS_CODIGO, COL_WMS_QTD, COL_WMS_DATA]
         )
-        
-        # Renomeia colunas para consistência
         df.rename(columns={
             COL_WMS_CODIGO: 'Codigo',
             COL_WMS_QTD: 'Qtd_CD',
@@ -53,24 +45,13 @@ def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
         }, inplace=True)
         
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
-        
-        # --- CORREÇÃO: Converter Código para numérico ---
         df['Codigo'] = pd.to_numeric(df['Codigo'], errors='coerce')
         df.dropna(subset=['Data', 'Codigo'], inplace=True)
         df['Codigo'] = df['Codigo'].astype(int)
-        # --- FIM DA CORREÇÃO ---
+        df['Qtd_CD'] = pd.to_numeric(df['Qtd_CD'], errors='coerce').fillna(0)
         
-        if df.empty:
-            st.error("Arquivo WMS não contém dados válidos nas colunas esperadas.")
-            return None
-            
-        # Pega a data mais recente disponível no WMS
-        latest_date = df['Data'].dt.date.max()
-        
-        # Filtra o WMS para conter *apenas* o estoque do último dia
-        df_latest = df[df['Data'].dt.date == latest_date].copy()
-        
-        return df_latest
+        # MUDANÇA: Retorna o DataFrame completo, não apenas o último dia
+        return df
         
     except Exception as e:
         st.error(f"Erro ao carregar o arquivo WMS ({file_path}): {e}")
@@ -80,7 +61,6 @@ def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
 def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
     """Carrega dados do Histórico de Solicitações (Lojas)."""
     try:
-        # Assume que a primeira planilha (index 0) é a correta
         df = pd.read_excel(
             file_path,
             sheet_name=0, 
@@ -89,7 +69,6 @@ def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
                 COL_HIST_ESTOQUE_LOJA, COL_HIST_PEDIDOS, COL_HIST_DATA
             ]
         )
-        
         df.rename(columns={
             COL_HIST_CODIGO: 'Codigo',
             COL_HIST_DESCRICAO: 'Descricao',
@@ -100,14 +79,10 @@ def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
         }, inplace=True)
         
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
-
-        # --- CORREÇÃO: Converter Código para numérico ---
         df['Codigo'] = pd.to_numeric(df['Codigo'], errors='coerce')
         df.dropna(subset=['Data', 'Codigo'], inplace=True)
         df['Codigo'] = df['Codigo'].astype(int)
-        # --- FIM DA CORREÇÃO ---
         
-        # Garante que colunas de soma sejam numéricas, tratando falhas
         df['Estoque_Lojas'] = pd.to_numeric(df['Estoque_Lojas'], errors='coerce').fillna(0)
         df['Pedidos'] = pd.to_numeric(df['Pedidos'], errors='coerce').fillna(0)
         df['Embalagem'] = pd.to_numeric(df['Embalagem'], errors='coerce')
@@ -118,66 +93,28 @@ def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
         st.error(f"Erro ao carregar o arquivo Histórico ({file_path}): {e}")
         return None
 
-# --- Função de Lógica Principal ---
+# --- Função Principal da Página ---
 
-def get_cd_stock_in_caixas(df_wms_latest, df_hist_full, product_code=None):
-    """
-    Calcula o estoque do CD em caixas, usando o mapa de embalagens do arquivo histórico.
-    Retorna 0 se a embalagem não for encontrada (conforme solicitado).
-    """
-    
-    # 1. Cria o mapa de embalagens (Código -> Embalagem) do histórico
-    embalagem_map = df_hist_full[['Codigo', 'Embalagem']].drop_duplicates(subset=['Codigo'])
-    
-    # 2. Agrega o estoque do WMS (em unidades)
-    wms_stock_units = df_wms_latest.groupby('Codigo')['Qtd_CD'].sum().reset_index()
-    
-    # 3. Combina o estoque WMS com o mapa de embalagens (merge em int)
-    df_merged = wms_stock_units.merge(embalagem_map, on='Codigo', how='left')
-    
-    # 4. Trata falhas (pedido do usuário: se falhar, é zero)
-    # Preenche embalagens nulas ou zero com 'None' para forçar o 'else'
-    df_merged['Embalagem'] = df_merged['Embalagem'].replace(0, pd.NA)
-    
-    # 5. Converte unidades para caixas
-    df_merged['Estoque_CD_Caixas'] = df_merged.apply(
-        lambda row: (row['Qtd_CD'] / row['Embalagem']) if pd.notna(row['Embalagem']) else 0,
-        axis=1
-    )
-    
-    # 6. Se um código de produto foi fornecido, filtra por ele (como int)
-    if product_code:
-        df_item = df_merged[df_merged['Codigo'] == product_code] # Compara como int
-        if df_item.empty:
-            return 0 # Produto existe no histórico mas não no WMS
-        return df_item['Estoque_CD_Caixas'].sum()
-    
-    # 7. Se não houver filtro, retorna o estoque total do CD
-    return df_merged['Estoque_CD_Caixas'].sum()
-
-
-# MUDANÇA: Adicionado 'engine' e 'base_data_path' como argumentos
-# (O 'engine' não será usado aqui)
 def show_historico_page(engine, base_data_path):
-    """Cria a interface da página de Histórico de Solicitações."""
-    
-    st.title("📊 Histórico de Solicitações vs. Estoques")
+    st.title("📊 Histórico de Transferência (Completo)")
 
-    # MUDANÇA: Definindo os caminhos dos arquivos dinamicamente
+    # --- Definir Caminhos e Carregar Dados ---
     hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
     wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
 
-    # --- Carregamento de Dados ---
-    # MUDANÇA: Usando os caminhos dinâmicos
     df_hist_full = load_hist_data(hist_file_path)
-    df_wms_latest = load_wms_data(wms_file_path)
+    df_wms_full = load_wms_data(wms_file_path) # MUDANÇA: Carrega o WMS completo
 
-    if df_hist_full is None or df_wms_latest is None:
-        st.error("Falha ao carregar um ou mais arquivos de dados. Verifique os uploads na página de Admin.")
+    if df_hist_full is None or df_wms_full is None:
+        st.error("Falha ao carregar um ou mais arquivos de dados. Verifique os uploads.")
         return
 
-    # --- LÓGICA DE DATA PADRÃO ---
-    # Por padrão, usa a data mais recente do arquivo histórico
+    # --- Criar Mapa de Embalagens ---
+    # Usamos isso para converter o estoque do CD de Unidades para Caixas
+    embalagem_map = df_hist_full[df_hist_full['Embalagem'] > 0][['Codigo', 'Embalagem']]
+    embalagem_map = embalagem_map.drop_duplicates(subset=['Codigo']).set_index('Codigo')
+
+    # --- Lógica de Data Padrão ---
     default_date = df_hist_full['Data'].max()
     if pd.isna(default_date):
         st.error("Não foi possível encontrar uma data válida no arquivo histórico.")
@@ -186,72 +123,54 @@ def show_historico_page(engine, base_data_path):
     ano_atual = default_date.year
     mes_atual_num = default_date.month
     mes_atual_nome = MESES_INVERSO.get(mes_atual_num, "Janeiro")
-    
     anos_disponiveis = sorted(df_hist_full['Data'].dt.year.unique(), reverse=True)
-    if ano_atual not in anos_disponiveis:
-        anos_disponiveis.insert(0, ano_atual)
-        
-    lista_meses_nomes = list(MESES_DISPONIVEIS.keys())
     
-    # Define o índice padrão (posição na lista) para o mês/ano
-    try:
-        index_ano = anos_disponiveis.index(ano_atual)
-    except ValueError:
-        index_ano = 0
-    try:
-        index_mes = lista_meses_nomes.index(mes_atual_nome)
-    except ValueError:
-        index_mes = 0
+    try: index_ano = anos_disponiveis.index(ano_atual)
+    except ValueError: index_ano = 0
+    
+    lista_meses_nomes = list(MESES_DISPONIVEIS.keys())
+    try: index_mes = lista_meses_nomes.index(mes_atual_nome)
+    except ValueError: index_mes = 0
 
     # --- Seletores de Data ---
     st.subheader("Selecione o Período")
     col1, col2 = st.columns(2)
     with col1:
-        ano_selecionado = st.selectbox(
-            "Selecione o Ano", 
-            anos_disponiveis, 
-            index=index_ano
-        )
+        ano_selecionado = st.selectbox("Selecione o Ano", anos_disponiveis, index=index_ano)
     with col2:
-        mes_selecionado = st.selectbox(
-            "Selecione o Mês", 
-            lista_meses_nomes, 
-            index=index_mes
-        )
+        mes_selecionado = st.selectbox("Selecione o Mês", lista_meses_nomes, index=index_mes)
     
     mes_num = MESES_DISPONIVEIS[mes_selecionado]
 
-    # --- FILTRAGEM DE DATAS ---
-    df_mensal = df_hist_full[
+    # --- Filtrar AMBOS os DataFrames pelo período ---
+    df_hist_mensal = df_hist_full[
         (df_hist_full['Data'].dt.year == ano_selecionado) &
         (df_hist_full['Data'].dt.month == mes_num)
     ]
+    df_wms_mensal = df_wms_full[
+        (df_wms_full['Data'].dt.year == ano_selecionado) &
+        (df_wms_full['Data'].dt.month == mes_num)
+    ]
 
-    if df_mensal.empty:
-        st.warning(f"Não há dados para {mes_selecionado} de {ano_selecionado}.")
+    if df_hist_mensal.empty:
+        st.warning(f"Não há dados no Histórico para {mes_selecionado} de {ano_selecionado}.")
         return
 
     st.markdown("---")
 
-    # --- FILTRO POR PRODUTO ESPECÍFICO ---
+    # --- Filtro por Produto ---
     st.subheader("Filtro por Produto (Opcional)")
-    
     tab1, tab2 = st.tabs(["Buscar por Descrição", "Buscar por Código"])
     
     codigo_para_filtrar = None
-    item_selecionado_display = None
+    item_selecionado_display = "Digite algo para buscar..."
 
-    # ABA 1: Busca por Descrição (Autocomplete)
     with tab1:
-        # Usa 'Descricao' (o nome renomeado e sem acento)
-        # Converte o código (int) para string APENAS para exibição
-        df_mensal['Display'] = df_mensal['Descricao'].astype(str) + " (Código: " + df_mensal['Codigo'].astype(str) + ")"
-        
+        df_hist_mensal['Display'] = df_hist_mensal['Descricao'].astype(str) + " (Código: " + df_hist_mensal['Codigo'].astype(str) + ")"
         descricao_busca = st.text_input("Digite a descrição ou parte dela:")
         
         if descricao_busca:
-            # Usa 'Descricao' (o nome renomeado e sem acento)
-            resultados_parciais = df_mensal[df_mensal['Descricao'].str.contains(descricao_busca, case=False, na=False)]
+            resultados_parciais = df_hist_mensal[df_hist_mensal['Descricao'].str.contains(descricao_busca, case=False, na=False)]
             opcoes_unicas = resultados_parciais.drop_duplicates(subset=['Codigo'])
             lista_opcoes = ["Selecione um item..."] + opcoes_unicas['Display'].tolist()
         else:
@@ -261,71 +180,78 @@ def show_historico_page(engine, base_data_path):
         
         if item_selecionado_display and item_selecionado_display not in ["Selecione um item...", "Digite algo para buscar..."]:
             try:
-                # --- CORREÇÃO: Extrai como INT ---
                 codigo_para_filtrar = int(re.search(r'\(Código: (\d+)\)', item_selecionado_display).group(1))
             except (AttributeError, ValueError):
                 st.error("Não foi possível extrair o código do item selecionado.")
 
-    # ABA 2: Busca por Código Direto
     with tab2:
         codigo_busca_direta = st.text_input("Ou digite o Código (apenas números):")
         if codigo_busca_direta:
             try:
-                # --- CORREÇÃO: Converte para INT ---
-                codigo_para_filtrar = int(codigo_busca_direta) # Usa int
-            except ValueError:
-                st.warning("Código deve conter apenas números.")
+                codigo_para_filtrar = int(codigo_busca_direta)
+                # Pega o nome do item para o título
+                nome_item = df_hist_full[df_hist_full['Codigo'] == codigo_para_filtrar]['Descricao'].iloc[0]
+                item_selecionado_display = f"{nome_item} (Código: {codigo_para_filtrar})"
+            except (ValueError, IndexError):
+                st.warning("Código não encontrado no histórico.")
 
     st.markdown("---")
     
     # --- PREPARAÇÃO DOS DADOS PARA O GRÁFICO ---
     
-    df_grafico = None
-    
     if codigo_para_filtrar:
         # 1. ANÁLISE POR ITEM
-        st.subheader(f"Análise: {item_selecionado_display or codigo_para_filtrar}")
+        st.subheader(f"Análise: {item_selecionado_display}")
         
-        df_item_hist = df_mensal[df_mensal['Codigo'] == codigo_para_filtrar] # Compara como int
-        if df_item_hist.empty:
-            st.warning("Produto não encontrado nos dados históricos do mês.")
-            return
-
-        # Agrupa os dados do item por dia
-        df_grafico = df_item_hist.groupby(df_item_hist['Data'].dt.date).agg(
+        # --- Lógica do Histórico (Lojas/Pedidos) ---
+        df_item_hist = df_hist_mensal[df_hist_mensal['Codigo'] == codigo_para_filtrar]
+        df_lojas_grafico = df_item_hist.groupby(df_item_hist['Data'].dt.date).agg(
             Pedidos_Item=('Pedidos', 'sum'),
             Estoque_Lojas_Item=('Estoque_Lojas', 'sum')
-        ).reset_index()
+        ).reset_index().rename(columns={'Data': 'Dia'})
+
+        # --- Lógica do WMS (Estoque CD) ---
+        df_item_wms = df_wms_mensal[df_wms_mensal['Codigo'] == codigo_para_filtrar]
+        df_cd_grafico = df_item_wms.groupby(df_item_wms['Data'].dt.date).agg(
+            Estoque_CD_Unidades=('Qtd_CD', 'sum')
+        ).reset_index().rename(columns={'Data': 'Dia'})
+
+        # Converter CD para Caixas
+        try:
+            embalagem = embalagem_map.loc[codigo_para_filtrar, 'Embalagem']
+            if pd.notna(embalagem) and embalagem > 0:
+                df_cd_grafico['Estoque_CD_Item'] = df_cd_grafico['Estoque_CD_Unidades'] / embalagem
+            else:
+                df_cd_grafico['Estoque_CD_Item'] = 0 # Embalagem não encontrada ou é 0
+        except KeyError:
+            st.warning(f"Não foi encontrada embalagem para o código {codigo_para_filtrar}. Estoque CD será 0.")
+            df_cd_grafico['Estoque_CD_Item'] = 0
+            
+        # --- Junção dos Dados ---
+        if not df_cd_grafico.empty:
+            df_cd_grafico = df_cd_grafico[['Dia', 'Estoque_CD_Item']]
+            df_final_grafico = pd.merge(df_lojas_grafico, df_cd_grafico, on='Dia', how='outer')
+        else:
+            df_final_grafico = df_lojas_grafico.copy()
+            df_final_grafico['Estoque_CD_Item'] = 0 # Nenhum dado de WMS para este item/mês
+            
+        df_final_grafico = df_final_grafico.set_index('Dia')
         
-        # Calcula o Estoque CD (já em caixas) para este item
-        estoque_cd_item = get_cd_stock_in_caixas(df_wms_latest, df_hist_full, codigo_para_filtrar)
-        df_grafico['Estoque_CD_Item'] = estoque_cd_item
-
-        # Renomeia para o gráfico
-        df_grafico.rename(columns={'Data': 'Dia'}, inplace=True)
-        df_grafico = df_grafico.set_index('Dia')
-
     else:
-        # 2. ANÁLISE TOTAL
+        # 2. ANÁLISE TOTAL (Lógica simplificada, pode não ser 100% precisa sem item)
         st.subheader(f"Análise Total - {mes_selecionado}/{ano_selecionado}")
         
-        # Agrupa os dados totais por dia
-        df_grafico = df_mensal.groupby(df_mensal['Data'].dt.date).agg(
+        df_final_grafico = df_hist_mensal.groupby(df_hist_mensal['Data'].dt.date).agg(
             Total_Pedidos=('Pedidos', 'sum'),
             Total_Estoque_Lojas=('Estoque_Lojas', 'sum')
-        ).reset_index()
+        ).reset_index().rename(columns={'Data': 'Dia'}).set_index('Dia')
         
-        # Calcula o Estoque CD Total (já em caixas)
-        estoque_cd_total = get_cd_stock_in_caixas(df_wms_latest, df_hist_full)
-        df_grafico['Total_Estoque_CD'] = estoque_cd_total
-        
-        # Renomeia para o gráfico
-        df_grafico.rename(columns={'Data': 'Dia'}, inplace=True)
-        df_grafico = df_grafico.set_index('Dia')
+        st.info("Selecione um item para ver a análise completa (incluindo Estoque CD).")
 
     # Exibe o gráfico de linhas
-    st.line_chart(df_grafico)
-    
-    # Exibe a tabela de dados do gráfico (opcional, mas útil)
-    with st.expander("Ver dados da tabela"):
-        st.dataframe(df_grafico)
+    if not df_final_grafico.empty:
+        st.line_chart(df_final_grafico)
+        with st.expander("Ver dados da tabela"):
+            st.dataframe(df_final_grafico)
+    else:
+        st.warning("Nenhum dado encontrado para exibir no gráfico.")
