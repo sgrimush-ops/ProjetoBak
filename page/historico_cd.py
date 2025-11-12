@@ -325,7 +325,3 @@ def show_historico_page(engine, base_data_path):
             st.dataframe(df_final_grafico)
     else:
         st.warning("Nenhum dado encontrado para exibir no gráfico.")
-    else:
-        st.warning("Nenhum dado encontrado para exibir no gráfico.")
-
-
