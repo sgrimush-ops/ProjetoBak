@@ -36,7 +36,7 @@ def get_approved_orders_chart(_engine):
             return pd.DataFrame(columns=["Volume (CX)"])
 
         # Define 'Dia' como datetime
-        df['Dia'] = pd.to_datetime(df['Dia'])
+        df['Dia'] = pd.to_datetime(df['Dia']).dt.strftime('%d/%m')
         df = df.set_index('Dia')
 
         # Cria um range contínuo de 30 dias
@@ -102,6 +102,7 @@ def show_home_page(engine, base_data_path):
     else:
         # Exibe gráfico de barras com preenchimento de largura total
         st.bar_chart(df_chart, use_container_width=True, height=400)
+
 
 
 
