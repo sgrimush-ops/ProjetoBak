@@ -264,8 +264,9 @@ def show_historico_page(engine, base_data_path):
 
     # Exibe o gráfico de linhas
     if not df_final_grafico.empty:
+        # Isso força o eixo X a ser categórico (dias) e não temporal (horas)
+        df_final_grafico['Dia'] = pd.to_datetime(df_final_grafico['Dia']).dt.strftime('%d/%m')
         
-        # MUDANÇA: Define as colunas a serem exibidas e suas cores
         colunas_y = []
         cores_hex = []
         
@@ -299,7 +300,7 @@ def show_historico_page(engine, base_data_path):
             
         st.line_chart(
             df_final_grafico,
-            x='Dia', # MUDANÇA: 'Dia' agora é uma coluna
+            x='Dia',
             y=colunas_y,
             color=cores_hex
         )
@@ -308,3 +309,4 @@ def show_historico_page(engine, base_data_path):
             st.dataframe(df_final_grafico)
     else:
         st.warning("Nenhum dado encontrado para exibir no gráfico.")
+
