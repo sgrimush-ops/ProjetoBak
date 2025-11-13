@@ -1,25 +1,12 @@
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime
-import pandas as pd 
+import pandas as pd # Import que faltava
 
 # =========================================================
 # FUNÇÕES DE BANCO DE DADOS (Específicas do Contato)
 # =========================================================
 
-def get_user_tickets(engine, username):
-    """Busca os tickets de um usuário específico."""
-    query = text("""
-        SELECT id, assunto, status, ultimo_update 
-        FROM contato_chamados
-        WHERE usuario_username = :username
-        ORDER BY ultimo_update DESC
-    """)
-    with engine.connect() as conn:
-        df = pd.read_sql_query(query, conn, params={"username": username})
-    return df
-
-def get_admin_tickets(engine):
 def get_user_tickets(engine, username):
     """Busca os tickets de um usuário específico."""
     query = text("""
@@ -145,7 +132,8 @@ def show_chat_view(engine, ticket_id, role, username):
     
     # Botão para voltar
     if st.button("← Voltar para lista de chamados"):
-        del st.session_state['selected_ticket_id']
+        if 'selected_ticket_id' in st.session_state:
+            del st.session_state['selected_ticket_id']
         st.rerun()
 
     messages = get_ticket_messages(engine, ticket_id)
@@ -172,7 +160,7 @@ def show_chat_view(engine, ticket_id, role, username):
 # --- PÁGINA PRINCIPAL ---
 
 def show_contato_page(engine, base_data_path):
-    st.title("Contato com a Supply Chain")
+    st.title("📞 Contato com a Administração")
     
     role = st.session_state.get("role", "user")
     username = st.session_state.get("username", "")
