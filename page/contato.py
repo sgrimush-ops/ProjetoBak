@@ -172,7 +172,7 @@ def show_chat_view(engine, ticket_id, role, username):
 # --- PÁGINA PRINCIPAL ---
 
 def show_contato_page(engine, base_data_path):
-    st.title("📞 Contato com a Administração")
+    st.title("Contato com a Supply Chain")
     
     role = st.session_state.get("role", "user")
     username = st.session_state.get("username", "")
