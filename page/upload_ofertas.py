@@ -13,21 +13,10 @@ def processar_upload(engine, df, data_inicio, data_final):
     'Upsert' = Insere se for novo, Atualiza o preço se (codigo, data_inicio, data_final) já existir.
     """
     
-    # 1. Definir o nome das colunas a serem lidas (A, B, E)
-    col_map = {
-        'produto': 'codigo',   # Coluna A
-        'Descrição': 'produto',  # Coluna B
-        'Vlr. Venda': 'oferta'   # Coluna E
-    }
-    
-    # Verifica se as colunas esperadas existem no upload
-    cols_necessarias = list(col_map.keys())
-    if not all(col in df.columns for col in cols_necessarias):
-        st.error(f"Erro: O arquivo enviado não contém as colunas esperadas: {', '.join(cols_necessarias)}")
-        return False, 0, 0
-    
-    # Renomeia e seleciona apenas as colunas que importam
-    df_renomeado = df[cols_necessarias].rename(columns=col_map)
+    # MUDANÇA: O DataFrame 'df' agora já chega com os nomes corretos
+    # ['codigo', 'produto', 'oferta'] vindos da função de load.
+    # A lógica de mapeamento de colunas foi removida.
+    df_renomeado = df.copy()
     
     # 2. Limpeza e Validação dos Dados
     try:
@@ -102,23 +91,32 @@ def show_upload_ofertas_page(engine, base_data_path):
     # 2. Upload do Arquivo
     st.subheader("2. Selecione o Arquivo")
     st.markdown("""
-    O arquivo deve conter **exatamente** os seguintes cabeçalhos nas colunas:
-    - Coluna A: **produto** (Será o `codigo`)
-    - Coluna B: **Descrição** (Será o `produto`)
-    - Coluna E: **Vlr. Venda** (Será a `oferta`)
+    O sistema irá ler **automaticamente** as colunas:
+    - **Coluna A** (como `codigo`)
+    - **Coluna B** (como `produto`)
+    - **Coluna E** (como `oferta`)
+    
+    *A primeira linha (cabeçalho) do arquivo será ignorada.*
     """)
     
-    # MUDANÇA: Alterado de ["csv", "xlsx"] para ["xls", "xlsx"]
     uploaded_file = st.file_uploader("Escolha um arquivo (.xls ou .xlsx)", type=["xls", "xlsx"])
 
     if uploaded_file:
         try:
-            # MUDANÇA: Simplificado. pd.read_excel lida com .xls e .xlsx.
-            # A lógica de CSV e encoding foi removida.
-            df = pd.read_excel(uploaded_file)
+            # MUDANÇA: Lendo por posição, não por nome.
+            # header=None -> Trata a primeira linha como dados.
+            # skiprows=1 -> Pula a primeira linha (o cabeçalho).
+            # usecols=[0, 1, 4] -> Lê apenas as colunas A, B, e E.
+            df = pd.read_excel(uploaded_file, header=None, skiprows=1, usecols=[0, 1, 4])
+            
+            # MUDANÇA: Renomeia as colunas lidas (0, 1, 4) para os nomes do nosso DF
+            df.columns = ['codigo', 'produto', 'oferta']
                 
         except Exception as e:
             st.error(f"Erro ao ler o arquivo: {e}")
+            # Se o erro for 'xlrd', lembra o usuário de adicionar no requirements.txt
+            if "xlrd" in str(e):
+                st.error("Dependência 'xlrd' não encontrada. Adicione 'xlrd' ao seu requirements.txt para ler arquivos .xls.")
             st.stop()
         # FIM DA MUDANÇA
 
