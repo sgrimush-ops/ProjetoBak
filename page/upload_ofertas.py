@@ -117,11 +117,11 @@ def show_upload_ofertas_page(engine, base_data_path):
     - Coluna E: **Vlr. Venda** (Será a `oferta`)
     """)
     
-    uploaded_file = st.file_uploader("Escolha um arquivo (.csv ou .xlsx)", type=["csv", "xlsx"])
+    uploaded_file = st.file_uploader("Escolha um arquivo (.csv ou .xlsx)", type=["xls", "xlsx"])
 
     if uploaded_file:
         try:
-            if uploaded_file.name.endswith('.csv'):
+            if uploaded_file.name.endswith('.xls'):
                 df = pd.read_csv(uploaded_file)
             else:
                 df = pd.read_excel(uploaded_file)
