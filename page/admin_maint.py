@@ -15,6 +15,7 @@ def make_hashes(password):
 
 # --- Funções de Manutenção do DB (CRUD de Usuários) ---
 
+# MUDANÇA: Removido @st.cache_data (já estava removido, mas confirmando)
 def get_all_users_details(engine):
     """Busca todos os usuários, seus roles e lojas."""
     try:
@@ -129,7 +130,7 @@ def show_admin_page(engine, base_data_path):
     st.markdown("Gerencie usuários, funções (roles) e acesso às lojas.")
     
     if st.button("🔄 Atualizar Lista de Usuários"):
-        get_all_users_details.clear() # Limpa o cache se houver
+        # MUDANÇA: Removida a linha get_all_users_details.clear()
         st.rerun()
 
     # 1. VISUALIZAÇÃO DOS USUÁRIOS
@@ -166,7 +167,7 @@ def show_admin_page(engine, base_data_path):
                 else:
                     if add_new_user(engine, new_username, new_password, new_role, new_lojas):
                         st.success(f"Usuário '{new_username}' criado com sucesso!")
-                        get_all_users_details.clear()
+                        # MUDANÇA: Removida a linha get_all_users_details.clear()
                         st.rerun()
 
     # --- ABA 2: Gerenciar Acesso (Role e Lojas) ---
@@ -222,7 +223,7 @@ def show_admin_page(engine, base_data_path):
                     if st.form_submit_button("Salvar Alterações de Acesso"):
                         if update_user_permissions(engine, user_to_manage, managed_role, managed_lojas):
                             st.success(f"Permissões de '{user_to_manage}' atualizadas!")
-                            get_all_users_details.clear()
+                            # MUDANÇA: Removida a linha get_all_users_details.clear()
                             st.rerun()
                         else:
                             st.error("Falha ao salvar alterações.")
@@ -270,7 +271,7 @@ def show_admin_page(engine, base_data_path):
                 if st.button(f"Confirmar Excluir {user_to_delete}", type="primary"):
                     if delete_user(engine, user_to_delete):
                         st.success(f"Usuário '{user_to_delete}' excluído com sucesso!")
-                        get_all_users_details.clear()
+                        # MUDANÇA: Removida a linha get_all_users_details.clear()
                         st.rerun()
                     else:
                         st.error("Falha ao excluir usuário.")
