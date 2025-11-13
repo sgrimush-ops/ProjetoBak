@@ -1,11 +1,25 @@
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime
+import pandas as pd 
 
 # =========================================================
 # FUNÇÕES DE BANCO DE DADOS (Específicas do Contato)
 # =========================================================
 
+def get_user_tickets(engine, username):
+    """Busca os tickets de um usuário específico."""
+    query = text("""
+        SELECT id, assunto, status, ultimo_update 
+        FROM contato_chamados
+        WHERE usuario_username = :username
+        ORDER BY ultimo_update DESC
+    """)
+    with engine.connect() as conn:
+        df = pd.read_sql_query(query, conn, params={"username": username})
+    return df
+
+def get_admin_tickets(engine):
 def get_user_tickets(engine, username):
     """Busca os tickets de um usuário específico."""
     query = text("""
