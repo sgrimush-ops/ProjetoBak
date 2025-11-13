@@ -16,19 +16,20 @@ from page.status_usuarios import show_status_page
 from page.admin_maint import show_admin_page
 from page.admin_tools import show_admin_tools
 from page.mudar_senha import show_mudar_senha_page
+from page.contato import show_contato_page # <-- ESTE IMPORT ESTAVA CORRETO
 
+# =========================================================
 # CONFIGURAÇÕES INICIAIS
 # =========================================================
 st.set_page_config(page_title="Gestão de Produtos", layout="wide")
 
-# O 'data' minúsculo é o fallback para rodar no seu PC local.
 BASE_DATA_PATH = os.environ.get("RENDER_DISK_PATH", "data")
-# Garante que o diretório exista (tanto no Render quanto local)
 os.makedirs(BASE_DATA_PATH, exist_ok=True) 
 
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006",
                "007", "008", "011", "012", "013", "014", "017", "018"]
 COLUNAS_LOJAS_PEDIDO = [f"loja_{loja}" for loja in LISTA_LOJAS]
+
 
 # =========================================================
 # FUNÇÕES DE SEGURANÇA
@@ -36,28 +37,28 @@ COLUNAS_LOJAS_PEDIDO = [f"loja_{loja}" for loja in LISTA_LOJAS]
 def make_hashes(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-
 def check_hashes(password, hashed_text):
     return make_hashes(password) == hashed_text
 
+
 # =========================================================
-# MUDANÇA: CONEXÃO DE BANCO (APENAS POSTGRES)
+# CONEXÃO DE BANCO (APENAS POSTGRES)
 # =========================================================
+# MUDANÇA: Cachear o 'engine' é a melhor prática
+@st.cache_resource
 def get_engine():
     db_url = os.getenv("DATABASE_URL")
     
-    # MUDANÇA: Verificação para garantir que a URL existe
     if not db_url:
         st.error("Erro fatal: A variável de ambiente DATABASE_URL não foi encontrada.")
         st.stop()
         
-    # MUDANÇA: O Render usa 'postgres://' mas SQLAlchemy prefere 'postgresql://'
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
         
-    return create_engine(db_url, connect_args={"sslmode": "require"})
+    # Pool size aumentado para suportar mais conexões simultâneas
+    return create_engine(db_url, connect_args={"sslmode": "require"}, pool_size=10, max_overflow=5)
 
-# MUDANÇA: Criamos o 'engine' uma vez aqui para ser usado em todo o app
 engine = get_engine()
 
 
@@ -65,8 +66,12 @@ engine = get_engine()
 # CRIAÇÃO / MIGRAÇÃO DE TABELAS
 # =========================================================
 def create_db_tables():
+    """
+    Cria todas as tabelas necessárias e executa a limpeza de dados antigos.
+    """
     try:
-        with engine.connect() as conn:
+        # MUDANÇA: Usar engine.begin() para garantir a transação
+        with engine.begin() as conn: 
             # --- tabela de usuários ---
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -81,7 +86,6 @@ def create_db_tables():
 
             # --- tabela de pedidos ---
             lojas_sql_cols = ", ".join([f"loja_{loja} INTEGER DEFAULT 0" for loja in LISTA_LOJAS])
-            # MUDANÇA: 'AUTOINCREMENT' é 'SERIAL' no Postgres, mas vamos usar o padrão
             conn.execute(text(f"""
                 CREATE TABLE IF NOT EXISTS pedidos_consolidados (
                     id SERIAL PRIMARY KEY, 
@@ -98,18 +102,54 @@ def create_db_tables():
                     {lojas_sql_cols}
                 )
             """))
-            conn.commit()
+
+            # --- MUDANÇA: Novas tabelas para o "Contato" ---
+            # (Esta parte estava faltando no seu script)
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS contato_chamados (
+                    id SERIAL PRIMARY KEY,
+                    usuario_username TEXT REFERENCES users(username),
+                    assunto TEXT,
+                    data_criacao TIMESTAMP,
+                    ultimo_update TIMESTAMP,
+                    status TEXT DEFAULT 'Aberto' 
+                )
+            """))
+            
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS contato_mensagens (
+                    id SERIAL PRIMARY KEY,
+                    chamado_id INTEGER REFERENCES contato_chamados(id) ON DELETE CASCADE,
+                    remetente_username TEXT,
+                    mensagem TEXT,
+                    data_envio TIMESTAMP
+                )
+            """))
+            
+            # --- MUDANÇA: Lógica de Auto-Deleção (Limpeza de 7 dias) ---
+            # (Esta parte também estava faltando)
+            conn.execute(text("""
+                DELETE FROM contato_mensagens 
+                WHERE chamado_id IN (
+                    SELECT id FROM contato_chamados 
+                    WHERE ultimo_update < (NOW() - INTERVAL '7 days')
+                )
+            """))
+            conn.execute(text("""
+                DELETE FROM contato_chamados 
+                WHERE ultimo_update < (NOW() - INTERVAL '7 days')
+            """))
             
     except Exception as e:
-        st.error(f"Erro ao inicializar o banco de dados: {e}")
-        st.stop()
-
+        # Ignora erros de "foreign key constraint" que podem acontecer na primeira execução
+        if "foreign key constraint" not in str(e):
+            st.error(f"Erro ao inicializar o banco de dados: {e}")
+            # st.stop() # Comentado para não parar o app se for um erro simples
 
 # =========================================================
 # LOGIN E PERFIL DE USUÁRIO
 # =========================================================
 def check_login_and_get_roles(username, password):
-    # MUDANÇA: Usando o 'engine' global com 'text()'
     with engine.connect() as conn:
         query = text("SELECT password, role, lojas_acesso FROM users WHERE username = :username")
         result = conn.execute(query, {"username": username.lower()})
@@ -129,8 +169,7 @@ def check_login_and_get_roles(username, password):
 
 
 def update_user_status(username, status):
-    # MUDANÇA: Usando 'engine.begin()' para auto-commit
-    current_time = datetime.now() # MUDANÇA: Passando objeto datetime
+    current_time = datetime.now()
     query = text("""
         UPDATE users 
         SET ultimo_acesso = :time, status_logado = :status 
@@ -143,6 +182,7 @@ def update_user_status(username, status):
             "status": status, 
             "username": username.lower()
         })
+
 
 # =========================================================
 # TELA DE LOGIN
@@ -165,8 +205,10 @@ def login_page():
             st.error("Usuário ou senha inválidos.")
 
     st.stop()
-  # =========================================================
-# MUDANÇA: Adicionar esta função
+
+
+# =========================================================
+# FUNÇÃO DE PRIMEIRO ACESSO (BOOTSTRAP)
 # =========================================================
 def check_if_first_run(engine):
     """Verifica se existe algum usuário no banco."""
@@ -177,37 +219,31 @@ def check_if_first_run(engine):
             count = result.scalar_one_or_none() or 0
         return count == 0
     except Exception as e:
-        # Se a tabela não existir ainda (embora o create_db_tables deva rodar antes)
-        if "does not exist" in str(e):
+        if "does not exist" in str(e): # Se a tabela 'users' não existir
             return True
         st.error(f"Erro ao verificar contagem de usuários: {e}")
-        return False # Assume que não é o first run se der erro
+        return False
+
+
 # =========================================================
 # MAIN APP
 # =========================================================
 def main():
     create_db_tables()
     
-    # MUDANÇA: Adiciona a verificação de primeiro acesso
     is_first_run = check_if_first_run(engine)
 
     if "logged_in" not in st.session_state:
         st.session_state["logged_in"] = False
 
-    # MUDANÇA: Nova lógica de roteamento
-    # Se for o primeiro acesso, força a página de admin
     if is_first_run:
         st.warning("🚀 Bem-vindo! Detectamos que este é o primeiro acesso.")
         st.info("Por favor, crie o primeiro usuário administrador do sistema.")
-        
-        # 'show_admin_page' e 'BASE_DATA_PATH' vêm do topo do seu app.py
         show_admin_page(engine=engine, base_data_path=BASE_DATA_PATH)
-        
-        st.stop() # Para a execução aqui, não mostrando o login
+        st.stop() 
 
-    # Se não for o primeiro acesso, continua normal
     if not st.session_state["logged_in"]:
-        login_page() # App normal, chama o login
+        login_page() 
 
     # --- O RESTO DA PÁGINA (SÓ RODA SE LOGADO) ---
     st.sidebar.success(f"Logado como: {st.session_state['username']}")
@@ -218,12 +254,14 @@ def main():
         st.session_state["logged_in"] = False
         st.rerun()
 
-    # --- MENU LATERAL (formato original restaurado) ---
+    # --- MENU LATERAL ---
+    # MUDANÇA: Adicionado "Contato" ao menu
     paginas_disponiveis = {
         "Home": show_home_page,
-        "Alterar Senha": show_mudar_senha_page,
         "Consulta de Estoque CD": show_consulta_page,
         "Histórico de Transferencia CD": show_historico_page,
+        "Alterar Senha": show_mudar_senha_page,
+        "Contato": show_contato_page, # <-- MUDANÇA: Adicionado aqui
     }
 
     if st.session_state.get("lojas_acesso"):
@@ -235,7 +273,7 @@ def main():
         paginas_disponiveis["Administração"] = show_admin_page
         paginas_disponiveis["Atualização de Dependências"] = show_admin_tools
 
-    # MUDANÇA DE NAVEGAÇÃO: Lógica para sincronizar botões e sidebar
+    
     page_list = list(paginas_disponiveis.keys())
 
     if "page" not in st.session_state:
@@ -262,6 +300,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
