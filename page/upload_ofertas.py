@@ -54,9 +54,6 @@ def processar_upload(engine, df, data_inicio, data_final):
         return False, 0, 0
 
     # 3. Lógica de UPSERT no Banco de Dados (PostgreSQL)
-    # Esta query é complexa, mas faz exatamente o que você pediu:
-    # - ON CONFLICT: Se (codigo, data_inicio, data_final) já existir...
-    # - DO UPDATE SET: ...atualize o preço (oferta) E QUANDO o preço for diferente.
     upsert_query = text("""
         INSERT INTO ofertas (codigo, produto, oferta, data_inicio, data_final)
         VALUES (:codigo, :produto, :oferta, :data_inicio, :data_final)
@@ -69,17 +66,11 @@ def processar_upload(engine, df, data_inicio, data_final):
             OR ofertas.produto IS DISTINCT FROM EXCLUDED.produto
     """)
     
-    # Converte o DataFrame para uma lista de dicionários para o SQLAlchemy
     records = df_renomeado.to_dict('records')
-    
-    inseridos = 0
-    atualizados = 0 # SQLAlchemy não nos diz facilmente quantos foram atualizados vs inseridos
-                    # em um upsert, mas sabemos o total.
     
     try:
         with engine.begin() as conn:
             result = conn.execute(upsert_query, records)
-            # rowcount nos diz quantas linhas foram afetadas (inseridas + atualizadas)
             total_afetado = result.rowcount 
             
         return True, total_afetado, len(records)
@@ -95,7 +86,7 @@ def processar_upload(engine, df, data_inicio, data_final):
 def show_upload_ofertas_page(engine, base_data_path):
     st.title("🚀 Upload de Ofertas (Marketing)")
     
-    st.info("Faça o upload do arquivo de ofertas (.csv ou .xlsx) e defina o período de vigência.")
+    st.info("Faça o upload do arquivo de ofertas (.xls ou .xlsx) e defina o período de vigência.")
 
     # 1. Seleção de Data
     st.subheader("1. Defina a Vigência da Oferta")
@@ -117,17 +108,19 @@ def show_upload_ofertas_page(engine, base_data_path):
     - Coluna E: **Vlr. Venda** (Será a `oferta`)
     """)
     
-    uploaded_file = st.file_uploader("Escolha um arquivo (.csv ou .xlsx)", type=["xls", "xlsx"])
+    # MUDANÇA: Alterado de ["csv", "xlsx"] para ["xls", "xlsx"]
+    uploaded_file = st.file_uploader("Escolha um arquivo (.xls ou .xlsx)", type=["xls", "xlsx"])
 
     if uploaded_file:
         try:
-            if uploaded_file.name.endswith('.xls'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
+            # MUDANÇA: Simplificado. pd.read_excel lida com .xls e .xlsx.
+            # A lógica de CSV e encoding foi removida.
+            df = pd.read_excel(uploaded_file)
+                
         except Exception as e:
             st.error(f"Erro ao ler o arquivo: {e}")
             st.stop()
+        # FIM DA MUDANÇA
 
         if st.button(f"Processar {uploaded_file.name}", type="primary"):
             with st.spinner("Processando e salvando ofertas..."):
