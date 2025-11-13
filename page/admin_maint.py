@@ -1,28 +1,23 @@
 import streamlit as st
-# MUDANÇA: Removido sqlite3
-from sqlalchemy import text # MUDANÇA: Adicionado import text
+from sqlalchemy import text 
 import pandas as pd
 import hashlib
 import json
 from datetime import datetime
 
 # --- Configurações Globais ---
-# MUDANÇA: Removido DB_PATH
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006", "007", "008", "011", "012", "013", "014", "017", "018"]
-ROLES_DISPONIVEIS = ["user", "admin"]
+ROLES_DISPONIVEIS = ["user", "admin", "mkt"] # <-- MUDANÇA: Adicionado "mkt"
 
-# --- Funções Auxiliares de Hashing (Copiadas do app.py) ---
+# --- Funções Auxiliares de Hashing ---
 def make_hashes(password):
-    """Gera um hash SHA256 para a senha."""
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 # --- Funções de Manutenção do DB (CRUD de Usuários) ---
 
-# MUDANÇA: Removido @st.cache_data, adicionado 'engine'
 def get_all_users_details(engine):
     """Busca todos os usuários, seus roles e lojas."""
     try:
-        # MUDANÇA: Usando 'engine'
         df = pd.read_sql_query(text("SELECT username, role, lojas_acesso FROM users"), con=engine)
         
         def format_lojas(lojas_json):
@@ -42,7 +37,6 @@ def get_all_users_details(engine):
         st.error(f"Erro ao carregar usuários: {e}")
         return pd.DataFrame(columns=['Usuário', 'Role', 'Lojas'])
 
-# MUDANÇA: Adicionado 'engine'
 def add_new_user(engine, username, password, role, lojas_acesso_list):
     """Adiciona um novo usuário completo ao DB."""
     try:
@@ -61,21 +55,17 @@ def add_new_user(engine, username, password, role, lojas_acesso_list):
             "status": 'DESLOGADO'
         }
         
-        # MUDANÇA: Usando 'engine.begin()' para transação
         with engine.begin() as conn:
             conn.execute(query, params)
-        
         return True
     
     except Exception as e:
-        # MUDANÇA: Verificação genérica de erro de integridade
         if "unique constraint" in str(e) or "duplicate key" in str(e):
             st.error(f"Erro: Usuário '{username.lower()}' já existe.")
         else:
             st.error(f"Erro ao adicionar usuário: {e}")
         return False
 
-# MUDANÇA: Adicionado 'engine'
 def delete_user(engine, username):
     """Remove um usuário do DB."""
     try:
@@ -89,7 +79,6 @@ def delete_user(engine, username):
         st.error(f"Erro ao deletar usuário: {e}")
         return False
 
-# MUDANÇA: Adicionado 'engine'
 def update_user_permissions(engine, username, role, lojas_acesso_list):
     """Atualiza o role e as lojas de um usuário."""
     try:
@@ -113,7 +102,6 @@ def update_user_permissions(engine, username, role, lojas_acesso_list):
         st.error(f"Erro ao alterar permissões: {e}")
         return False
 
-# MUDANÇA: Adicionado 'engine'
 def update_user_password(engine, username, new_password):
     """Altera a senha de um usuário existente."""
     try:
@@ -135,19 +123,17 @@ def update_user_password(engine, username, new_password):
 
 # --- Lógica de Exibição da Página ---
 
-# MUDANÇA: Adicionado 'engine' e 'base_data_path'
 def show_admin_page(engine, base_data_path):
     """Cria a interface do painel de administração."""
     st.title("🛡️ Painel de Administração")
     st.markdown("Gerencie usuários, funções (roles) e acesso às lojas.")
     
     if st.button("🔄 Atualizar Lista de Usuários"):
-        # MUDANÇA: Removido 'clear()'
+        get_all_users_details.clear() # Limpa o cache se houver
         st.rerun()
 
     # 1. VISUALIZAÇÃO DOS USUÁRIOS
     st.subheader("Usuários Cadastrados")
-    # MUDANÇA: Passando 'engine'
     df_users = get_all_users_details(engine)
     
     if df_users.empty:
@@ -169,7 +155,7 @@ def show_admin_page(engine, base_data_path):
             new_role = st.selectbox("Função (Role):", ROLES_DISPONIVEIS, index=0, key="add_role")
             
             new_lojas = st.multiselect(
-                "Quais lojas este usuário pode acessar? (Se for admin, pode deixar em branco)", 
+                "Quais lojas este usuário pode acessar? (Se for admin ou mkt, pode deixar em branco)", 
                 LISTA_LOJAS, 
                 key="add_lojas"
             )
@@ -178,9 +164,9 @@ def show_admin_page(engine, base_data_path):
                 if not (new_username and new_password):
                     st.warning("Preencha pelo menos o Login e a Senha.")
                 else:
-                    # MUDANÇA: Passando 'engine'
                     if add_new_user(engine, new_username, new_password, new_role, new_lojas):
                         st.success(f"Usuário '{new_username}' criado com sucesso!")
+                        get_all_users_details.clear()
                         st.rerun()
 
     # --- ABA 2: Gerenciar Acesso (Role e Lojas) ---
@@ -203,7 +189,6 @@ def show_admin_page(engine, base_data_path):
                 current_role_index = ROLES_DISPONIVEIS.index(user_data['Role']) if user_data['Role'] in ROLES_DISPONIVEIS else 0
                 
                 try:
-                    # MUDANÇA: Buscando o JSON de lojas com 'engine'
                     with engine.connect() as conn:
                         query = text("SELECT lojas_acesso FROM users WHERE username = :username")
                         result = conn.execute(query, {"username": user_to_manage.lower()})
@@ -235,9 +220,9 @@ def show_admin_page(engine, base_data_path):
                     )
                     
                     if st.form_submit_button("Salvar Alterações de Acesso"):
-                        # MUDANÇA: Passando 'engine'
                         if update_user_permissions(engine, user_to_manage, managed_role, managed_lojas):
                             st.success(f"Permissões de '{user_to_manage}' atualizadas!")
+                            get_all_users_details.clear()
                             st.rerun()
                         else:
                             st.error("Falha ao salvar alterações.")
@@ -258,7 +243,6 @@ def show_admin_page(engine, base_data_path):
                     
                     if st.form_submit_button("Confirmar Alteração de Senha"):
                         if new_pass:
-                            # MUDANÇA: Passando 'engine'
                             if update_user_password(engine, user_to_update_pass, new_pass):
                                 st.success(f"Senha do usuário '{user_to_update_pass}' alterada!")
                             else:
@@ -283,10 +267,10 @@ def show_admin_page(engine, base_data_path):
             user_to_delete = st.selectbox("Selecione o Usuário para Excluir:", user_list_del, key="delete_user_select", index=None)
 
             if user_to_delete:
-                if st.button(f"Confirmar Exclusão de {user_to_delete}", type="primary"):
-                    # MUDANÇA: Passando 'engine'
+                if st.button(f"Confirmar Excluir {user_to_delete}", type="primary"):
                     if delete_user(engine, user_to_delete):
                         st.success(f"Usuário '{user_to_delete}' excluído com sucesso!")
+                        get_all_users_details.clear()
                         st.rerun()
                     else:
                         st.error("Falha ao excluir usuário.")
