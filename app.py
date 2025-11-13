@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime
 import json
 import os
-from sqlalchemy import create_engine, text  # MUDANÇA: Importado 'text'
+from sqlalchemy import create_engine, text
 
 # --- Importa as páginas ---
 from page.home import show_home_page
@@ -40,7 +40,6 @@ def make_hashes(password):
 def check_hashes(password, hashed_text):
     return make_hashes(password) == hashed_text
 
-
 # =========================================================
 # MUDANÇA: CONEXÃO DE BANCO (APENAS POSTGRES)
 # =========================================================
@@ -56,7 +55,6 @@ def get_engine():
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
         
-    # MUDANÇA: Removido o 'else' que conectava ao SQLite
     return create_engine(db_url, connect_args={"sslmode": "require"})
 
 # MUDANÇA: Criamos o 'engine' uma vez aqui para ser usado em todo o app
@@ -100,7 +98,7 @@ def create_db_tables():
                     {lojas_sql_cols}
                 )
             """))
-            conn.commit() # MUDANÇA: Commit da transação
+            conn.commit()
             
     except Exception as e:
         st.error(f"Erro ao inicializar o banco de dados: {e}")
@@ -131,7 +129,6 @@ def check_login_and_get_roles(username, password):
 
 
 def update_user_status(username, status):
-    # MUDANÇA: Removida conexão sqlite e try/except desnecessário
     # MUDANÇA: Usando 'engine.begin()' para auto-commit
     current_time = datetime.now() # MUDANÇA: Passando objeto datetime
     query = text("""
@@ -146,7 +143,6 @@ def update_user_status(username, status):
             "status": status, 
             "username": username.lower()
         })
-
 
 # =========================================================
 # TELA DE LOGIN
@@ -225,9 +221,9 @@ def main():
     # --- MENU LATERAL (formato original restaurado) ---
     paginas_disponiveis = {
         "Home": show_home_page,
+        "Alterar Senha": show_mudar_senha_page,
         "Consulta de Estoque CD": show_consulta_page,
         "Histórico de Transferencia CD": show_historico_page,
-        "Alterar Senha": show_mudar_senha_page,
     }
 
     if st.session_state.get("lojas_acesso"):
@@ -266,5 +262,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
