@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import hashlib
-from datetime import datetime
+from datetime import datetime, date # MUDANÇA: Adicionado 'date'
 import json
 import os
 from sqlalchemy import create_engine, text
@@ -16,7 +16,9 @@ from page.status_usuarios import show_status_page
 from page.admin_maint import show_admin_page
 from page.admin_tools import show_admin_tools
 from page.mudar_senha import show_mudar_senha_page
-from page.contato import show_contato_page # <-- ESTE IMPORT ESTAVA CORRETO
+from page.contato import show_contato_page
+from page.upload_ofertas import show_upload_ofertas_page # MUDANÇA: Novo import
+from page.ver_ofertas import show_ver_ofertas_page     # MUDANÇA: Novo import
 
 # =========================================================
 # CONFIGURAÇÕES INICIAIS
@@ -44,7 +46,6 @@ def check_hashes(password, hashed_text):
 # =========================================================
 # CONEXÃO DE BANCO (APENAS POSTGRES)
 # =========================================================
-# MUDANÇA: Cachear o 'engine' é a melhor prática
 @st.cache_resource
 def get_engine():
     db_url = os.getenv("DATABASE_URL")
@@ -56,7 +57,6 @@ def get_engine():
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
         
-    # Pool size aumentado para suportar mais conexões simultâneas
     return create_engine(db_url, connect_args={"sslmode": "require"}, pool_size=10, max_overflow=5)
 
 engine = get_engine()
@@ -70,7 +70,6 @@ def create_db_tables():
     Cria todas as tabelas necessárias e executa a limpeza de dados antigos.
     """
     try:
-        # MUDANÇA: Usar engine.begin() para garantir a transação
         with engine.begin() as conn: 
             # --- tabela de usuários ---
             conn.execute(text("""
@@ -103,8 +102,7 @@ def create_db_tables():
                 )
             """))
 
-            # --- MUDANÇA: Novas tabelas para o "Contato" ---
-            # (Esta parte estava faltando no seu script)
+            # --- tabelas de "Contato" ---
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS contato_chamados (
                     id SERIAL PRIMARY KEY,
@@ -115,7 +113,6 @@ def create_db_tables():
                     status TEXT DEFAULT 'Aberto' 
                 )
             """))
-            
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS contato_mensagens (
                     id SERIAL PRIMARY KEY,
@@ -126,25 +123,39 @@ def create_db_tables():
                 )
             """))
             
-            # --- MUDANÇA: Lógica de Auto-Deleção (Limpeza de 7 dias) ---
-            # (Esta parte também estava faltando)
+            # --- MUDANÇA: Nova tabela de OFERTAS ---
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS ofertas (
+                    id SERIAL PRIMARY KEY,
+                    codigo INTEGER NOT NULL,
+                    produto TEXT,
+                    oferta NUMERIC(10, 2),
+                    data_inicio DATE NOT NULL,
+                    data_final DATE NOT NULL,
+                    -- Cria uma restrição única para o "upsert" funcionar
+                    UNIQUE(codigo, data_inicio, data_final)
+                )
+            """))
+            
+            # --- Lógica de Auto-Deleção (Limpeza de 7 dias Contato) ---
+            seven_days_ago = (datetime.now() - pd.Timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
+            
             conn.execute(text("""
                 DELETE FROM contato_mensagens 
                 WHERE chamado_id IN (
                     SELECT id FROM contato_chamados 
-                    WHERE ultimo_update < (NOW() - INTERVAL '7 days')
+                    WHERE ultimo_update < :seven_days_ago
                 )
-            """))
+            """), {"seven_days_ago": seven_days_ago})
+            
             conn.execute(text("""
                 DELETE FROM contato_chamados 
-                WHERE ultimo_update < (NOW() - INTERVAL '7 days')
-            """))
+                WHERE ultimo_update < :seven_days_ago
+            """), {"seven_days_ago": seven_days_ago})
             
     except Exception as e:
-        # Ignora erros de "foreign key constraint" que podem acontecer na primeira execução
         if "foreign key constraint" not in str(e):
             st.error(f"Erro ao inicializar o banco de dados: {e}")
-            # st.stop() # Comentado para não parar o app se for um erro simples
 
 # =========================================================
 # LOGIN E PERFIL DE USUÁRIO
@@ -183,7 +194,6 @@ def update_user_status(username, status):
             "username": username.lower()
         })
 
-
 # =========================================================
 # TELA DE LOGIN
 # =========================================================
@@ -203,9 +213,7 @@ def login_page():
             st.rerun()
         else:
             st.error("Usuário ou senha inválidos.")
-
     st.stop()
-
 
 # =========================================================
 # FUNÇÃO DE PRIMEIRO ACESSO (BOOTSTRAP)
@@ -219,11 +227,10 @@ def check_if_first_run(engine):
             count = result.scalar_one_or_none() or 0
         return count == 0
     except Exception as e:
-        if "does not exist" in str(e): # Se a tabela 'users' não existir
+        if "does not exist" in str(e):
             return True
         st.error(f"Erro ao verificar contagem de usuários: {e}")
         return False
-
 
 # =========================================================
 # MAIN APP
@@ -255,23 +262,31 @@ def main():
         st.rerun()
 
     # --- MENU LATERAL ---
-    # MUDANÇA: Adicionado "Contato" ao menu
+    # MUDANÇA: Adicionado "Ofertas Atuais" (para todos)
     paginas_disponiveis = {
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
         "Histórico de Transferencia CD": show_historico_page,
+        "Ofertas Atuais": show_ver_ofertas_page, # <-- MUDANÇA
         "Alterar Senha": show_mudar_senha_page,
-        "Contato": show_contato_page, # <-- MUDANÇA: Adicionado aqui
+        "Contato": show_contato_page, 
     }
 
+    # Menu para quem digita pedido
     if st.session_state.get("lojas_acesso"):
         paginas_disponiveis["Digitar Pedidos"] = show_pedidos_page
 
+    # Menu específico de Marketing (MKT)
+    if st.session_state.get("role") == "mkt":
+        paginas_disponiveis["Upload Ofertas"] = show_upload_ofertas_page # <-- MUDANÇA
+    
+    # Menu de Admin
     if st.session_state.get("role") == "admin":
         paginas_disponiveis["Aprovação de Pedidos"] = show_aprovacao_page
         paginas_disponiveis["Status do Usuário"] = show_status_page
         paginas_disponiveis["Administração"] = show_admin_page
         paginas_disponiveis["Atualização de Dependências"] = show_admin_tools
+        paginas_disponiveis["Upload Ofertas"] = show_upload_ofertas_page # <-- MUDANÇA (Admin tbm pode)
 
     
     page_list = list(paginas_disponiveis.keys())
@@ -300,4 +315,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
