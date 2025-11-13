@@ -4,24 +4,23 @@ import hashlib
 from datetime import datetime
 import json
 import os
-# MUDANÇA: Removido 'sqlite3' e 'psycopg2'
 from sqlalchemy import create_engine, text  # MUDANÇA: Importado 'text'
 
 # --- Importa as páginas ---
 from page.home import show_home_page
-from page.consulta_estoq_cd import show_consulta_page   # MUDANÇA
-from page.historico_cd import show_historico_page      # MUDANÇA
+from page.consulta_estoq_cd import show_consulta_page
+from page.historico_cd import show_historico_page
 from page.pedidos import show_pedidos_page
 from page.aprovacao_pedidos import show_aprovacao_page
-from page.status_usuarios import show_status_page      # MUDANÇA
+from page.status_usuarios import show_status_page
 from page.admin_maint import show_admin_page
 from page.admin_tools import show_admin_tools
+from page.mudar_senha import show_mudar_senha_page
 
 # CONFIGURAÇÕES INICIAIS
 # =========================================================
 st.set_page_config(page_title="Gestão de Produtos", layout="wide")
 
-# MUDANÇA: Adicionar esta seção de volta para os ARQUIVOS
 # O 'data' minúsculo é o fallback para rodar no seu PC local.
 BASE_DATA_PATH = os.environ.get("RENDER_DISK_PATH", "data")
 # Garante que o diretório exista (tanto no Render quanto local)
@@ -30,7 +29,6 @@ os.makedirs(BASE_DATA_PATH, exist_ok=True)
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006",
                "007", "008", "011", "012", "013", "014", "017", "018"]
 COLUNAS_LOJAS_PEDIDO = [f"loja_{loja}" for loja in LISTA_LOJAS]
-
 
 # =========================================================
 # FUNÇÕES DE SEGURANÇA
@@ -69,8 +67,6 @@ engine = get_engine()
 # CRIAÇÃO / MIGRAÇÃO DE TABELAS
 # =========================================================
 def create_db_tables():
-    # MUDANÇA: Removidas conexões sqlite
-    # MUDANÇA: Usando o 'engine' global do SQLAlchemy
     try:
         with engine.connect() as conn:
             # --- tabela de usuários ---
@@ -115,7 +111,6 @@ def create_db_tables():
 # LOGIN E PERFIL DE USUÁRIO
 # =========================================================
 def check_login_and_get_roles(username, password):
-    # MUDANÇA: Removida conexão sqlite
     # MUDANÇA: Usando o 'engine' global com 'text()'
     with engine.connect() as conn:
         query = text("SELECT password, role, lojas_acesso FROM users WHERE username = :username")
@@ -232,6 +227,7 @@ def main():
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
         "Histórico de Transferencia CD": show_historico_page,
+        "Alterar Senha": show_mudar_senha_page,
     }
 
     if st.session_state.get("lojas_acesso"):
@@ -243,7 +239,6 @@ def main():
         paginas_disponiveis["Administração"] = show_admin_page
         paginas_disponiveis["Atualização de Dependências"] = show_admin_tools
 
-    
     # MUDANÇA DE NAVEGAÇÃO: Lógica para sincronizar botões e sidebar
     page_list = list(paginas_disponiveis.keys())
 
@@ -271,4 +266,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
