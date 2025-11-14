@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import hashlib
-from datetime import datetime, date # MUDANÇA: Adicionado 'date'
+from datetime import datetime, date
 import json
 import os
 from sqlalchemy import create_engine, text
@@ -17,8 +17,8 @@ from page.admin_maint import show_admin_page
 from page.admin_tools import show_admin_tools
 from page.mudar_senha import show_mudar_senha_page
 from page.contato import show_contato_page
-from page.upload_ofertas import show_upload_ofertas_page # MUDANÇA: Novo import
-from page.ver_ofertas import show_ver_ofertas_page     # MUDANÇA: Novo import
+from page.upload_ofertas import show_upload_ofertas_page
+from page.ver_ofertas import show_ver_ofertas_page
 
 # =========================================================
 # CONFIGURAÇÕES INICIAIS
@@ -123,7 +123,7 @@ def create_db_tables():
                 )
             """))
             
-            # --- MUDANÇA: Nova tabela de OFERTAS ---
+            # --- tabela de OFERTAS ---
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS ofertas (
                     id SERIAL PRIMARY KEY,
@@ -132,7 +132,6 @@ def create_db_tables():
                     oferta NUMERIC(10, 2),
                     data_inicio DATE NOT NULL,
                     data_final DATE NOT NULL,
-                    -- Cria uma restrição única para o "upsert" funcionar
                     UNIQUE(codigo, data_inicio, data_final)
                 )
             """))
@@ -233,6 +232,35 @@ def check_if_first_run(engine):
         return False
 
 # =========================================================
+# MUDANÇA: NOVA FUNÇÃO DE CONTAGEM DE MENSAGENS
+# =========================================================
+@st.cache_data(ttl=60) # Cache de 1 minuto
+def get_unread_message_count(_engine, username, role):
+    """Pega a contagem de mensagens não lidas para o usuário/admin."""
+    query_str = ""
+    params = {}
+    
+    if role == "admin":
+        # Admin vê tickets 'Abertos' (que o usuário enviou)
+        query_str = "SELECT COUNT(id) FROM contato_chamados WHERE status = 'Aberto'"
+    else:
+        # Usuário vê tickets 'Respondidos' (que o admin enviou)
+        query_str = "SELECT COUNT(id) FROM contato_chamados WHERE status = 'Respondido' AND usuario_username = :username"
+        params = {"username": username}
+
+    if not query_str:
+        return 0
+
+    try:
+        with _engine.connect() as conn:
+            result = conn.execute(text(query_str), params)
+            count = result.scalar_one_or_none() or 0
+        return count
+    except Exception as e:
+        print(f"Erro ao buscar contagem de mensagens: {e}") # Loga o erro no console
+        return 0
+
+# =========================================================
 # MAIN APP
 # =========================================================
 def main():
@@ -261,56 +289,79 @@ def main():
         st.session_state["logged_in"] = False
         st.rerun()
 
+    # --- MUDANÇA: Lógica de Notificação de Contato ---
+    username = st.session_state.get("username", "")
+    role = st.session_state.get("role", "user")
+    
+    # Busca a contagem de mensagens (usando a nova função)
+    unread_count = get_unread_message_count(engine, username, role)
+    
+    # Cria o nome do menu dinamicamente
+    contato_menu_label = "Contato"
+    if unread_count > 0:
+        contato_menu_label = f"Contato ({unread_count}) 🔴" # Adiciona contagem e círculo
+
     # --- MENU LATERAL ---
-    # MUDANÇA: Adicionado "Ofertas Atuais" (para todos)
-    paginas_disponiveis = {
+    # Mapeamento para o radio (com labels dinâmicas)
+    paginas_disponiveis_labels = {
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
         "Histórico de Transferencia CD": show_historico_page,
-        "Ofertas Atuais": show_ver_ofertas_page, # <-- MUDANÇA
+        "Ofertas Atuais": show_ver_ofertas_page,
         "Alterar Senha": show_mudar_senha_page,
-        "Contato": show_contato_page, 
+        contato_menu_label: show_contato_page, # <-- MUDANÇA: Label dinâmica
     }
 
     # Menu para quem digita pedido
     if st.session_state.get("lojas_acesso"):
-        paginas_disponiveis["Digitar Pedidos"] = show_pedidos_page
+        paginas_disponiveis_labels["Digitar Pedidos"] = show_pedidos_page
 
     # Menu específico de Marketing (MKT)
     if st.session_state.get("role") == "mkt":
-        paginas_disponiveis["Upload Ofertas"] = show_upload_ofertas_page # <-- MUDANÇA
+        paginas_disponiveis_labels["Upload Ofertas"] = show_upload_ofertas_page
     
     # Menu de Admin
     if st.session_state.get("role") == "admin":
-        paginas_disponiveis["Aprovação de Pedidos"] = show_aprovacao_page
-        paginas_disponiveis["Status do Usuário"] = show_status_page
-        paginas_disponiveis["Administração"] = show_admin_page
-        paginas_disponiveis["Atualização de Dependências"] = show_admin_tools
-        paginas_disponiveis["Upload Ofertas"] = show_upload_ofertas_page # <-- MUDANÇA (Admin tbm pode)
+        paginas_disponiveis_labels["Aprovação de Pedidos"] = show_aprovacao_page
+        paginas_disponiveis_labels["Status do Usuário"] = show_status_page
+        paginas_disponiveis_labels["Administração"] = show_admin_page
+        paginas_disponiveis_labels["Atualização de Dependências"] = show_admin_tools
+        if "Upload Ofertas" not in paginas_disponiveis_labels: # Evita duplicar
+            paginas_disponiveis_labels["Upload Ofertas"] = show_upload_ofertas_page
 
     
-    page_list = list(paginas_disponiveis.keys())
+    # --- MUDANÇA: Lógica de Navegação Atualizada ---
+    page_list_labels = list(paginas_disponiveis_labels.keys())
 
-    if "page" not in st.session_state:
-        st.session_state.page = "Home"
+    # 'page_key' armazena a *label* selecionada (ex: "Contato (2) 🔴")
+    if "page_key" not in st.session_state:
+        st.session_state.page_key = "Home"
     
-    if st.session_state.page not in page_list:
-        st.session_state.page = "Home"
+    # Se a label mudou (ex: de "Contato" para "Contato (1) 🔴"), atualiza a seleção
+    if st.session_state.page_key not in page_list_labels:
+        if "Contato" in st.session_state.page_key:
+            st.session_state.page_key = contato_menu_label # Força a nova label
+        else:
+            st.session_state.page_key = "Home" # Fallback
 
     def update_sidebar_selection():
-        st.session_state.page = st.session_state["sidebar_radio_key"]
+        st.session_state.page_key = st.session_state["sidebar_radio_key"]
 
-    current_page_index = page_list.index(st.session_state.page)
+    current_page_index = page_list_labels.index(st.session_state.page_key)
 
     st.sidebar.radio(
         "Selecione a Página:", 
-        page_list, 
+        page_list_labels, 
         index=current_page_index,
         on_change=update_sidebar_selection,
         key="sidebar_radio_key"
     )
     
-    paginas_disponiveis[st.session_state.page](engine=engine, base_data_path=BASE_DATA_PATH)
+    # Pega a função de página correspondente à label selecionada
+    selected_page_func = paginas_disponiveis_labels[st.session_state.page_key]
+    
+    # Executa a função
+    selected_page_func(engine=engine, base_data_path=BASE_DATA_PATH)
 
 
 if __name__ == "__main__":
