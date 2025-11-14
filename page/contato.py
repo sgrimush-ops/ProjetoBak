@@ -1,7 +1,7 @@
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime
-import pandas as pd # Import que faltava
+import pandas as pd
 
 # =========================================================
 # FUNÇÕES DE BANCO DE DADOS (Específicas do Contato)
@@ -27,16 +27,14 @@ def get_admin_tickets(engine):
         WHERE status = 'Aberto' OR status = 'Respondido'
         ORDER BY ultimo_update ASC
     """)
-    query_closed = text("""
-        SELECT id, usuario_username, assunto, status, ultimo_update 
-        FROM contato_chamados
-        WHERE status = 'Fechado'
-        ORDER BY ultimo_update DESC
-    """)
+    
+    # MUDANÇA: Removida a query de chamados fechados
+    
     with engine.connect() as conn:
         df_open = pd.read_sql_query(query_open, conn)
-        df_closed = pd.read_sql_query(query_closed, conn)
-    return df_open, df_closed
+        
+    # MUDANÇA: Retorna apenas os chamados abertos
+    return df_open
 
 def create_new_ticket(engine, username, assunto, mensagem):
     """Cria um novo ticket e a primeira mensagem."""
@@ -112,16 +110,7 @@ def add_message_to_ticket(engine, ticket_id, username, mensagem, new_status):
         st.error(f"Erro ao enviar mensagem: {e}")
         return False
 
-def close_ticket(engine, ticket_id):
-    """Fecha um ticket (apenas admin)."""
-    try:
-        with engine.begin() as conn:
-            query = text("UPDATE contato_chamados SET status = 'Fechado' WHERE id = :ticket_id")
-            conn.execute(query, {"ticket_id": ticket_id})
-        return True
-    except Exception as e:
-        st.error(f"Erro ao fechar chamado: {e}")
-        return False
+# MUDANÇA: Removida a função 'close_ticket'
 
 # =========================================================
 # INTERFACE DA PÁGINA
@@ -141,7 +130,11 @@ def show_chat_view(engine, ticket_id, role, username):
     # Exibe o histórico de chat
     for _, row in messages.iterrows():
         # Define o avatar (pessoa ou admin)
+        # Se o remetente for o usuário logado, avatar de "pessoa"
+        # Se for outra pessoa (o admin), avatar de "escudo"
         avatar = "🧑‍💻" if row['remetente_username'] == username else "🛡️"
+        
+        # O nome exibido é o 'remetente_username' real
         with st.chat_message(row['remetente_username'], avatar=avatar):
             st.write(row['mensagem'])
             st.caption(f"Enviado em: {row['data_envio'].strftime('%d/%m/%Y %H:%M')}")
@@ -160,7 +153,7 @@ def show_chat_view(engine, ticket_id, role, username):
 # --- PÁGINA PRINCIPAL ---
 
 def show_contato_page(engine, base_data_path):
-    st.title("📞 Contato com a Administração")
+    st.title("Contato com a Supply Chain")
     
     role = st.session_state.get("role", "user")
     username = st.session_state.get("username", "")
@@ -174,7 +167,9 @@ def show_contato_page(engine, base_data_path):
     else:
         if role == "admin":
             st.subheader("Painel de Chamados (Admin)")
-            df_open, df_closed = get_admin_tickets(engine)
+            
+            # MUDANÇA: Recebe apenas df_open
+            df_open = get_admin_tickets(engine)
             
             st.markdown("##### Chamados Ativos (Abertos / Respondidos)")
             if df_open.empty:
@@ -189,8 +184,7 @@ def show_contato_page(engine, base_data_path):
                         st.session_state['selected_ticket_id'] = row['id']
                         st.rerun()
 
-            with st.expander("Ver Chamados Fechados"):
-                st.dataframe(df_closed, use_container_width=True)
+            # MUDANÇA: Removido o expander "Ver Chamados Fechados"
 
         else:
             # --- VISÃO DO USUÁRIO ---
