@@ -97,13 +97,13 @@ def load_wms_data(file_path: str):
 # MUDANÇA: Nova função para carregar ofertas ativas
 @st.cache_data(ttl=300) # Cache de 5 minutos
 def load_active_offers(_engine):
-    """Busca ofertas do banco de dados que estão ativas hoje."""
+    """Busca ofertas do banco de dados que estão ativas hoje OU no futuro."""
     today = date.today()
     query = text("""
         SELECT codigo, oferta, data_inicio, data_final
         FROM ofertas
-        WHERE :today >= data_inicio AND :today <= data_final
-    """)
+        WHERE data_final >= :today
+    """) # MUDANÇA: Removido 'data_inicio' para pegar também ofertas futuras
     try:
         with _engine.connect() as conn:
             df = pd.read_sql(query, conn, params={"today": today})
@@ -281,17 +281,25 @@ def show_pedidos_page(engine, base_data_path):
         # Barra de informação padrão
         st.info(f"**Item:** {prod_sel['Produto']} (Cód: {cod}) | **Emb:** {emb} un/cx | **Estoque CD:** {stock_display}")
         
-        # MUDANÇA: Lógica para buscar e exibir a oferta
+        # MUDANÇA: Lógica para buscar e exibir a oferta (ativa OU futura)
         try:
+            today = date.today() # Pega a data de hoje
             if not df_ofertas.empty and cod in df_ofertas.index:
                 # .loc[cod] pega a linha onde o índice é o código do produto
                 oferta_data = df_ofertas.loc[cod] 
                 preco = f"R$ {oferta_data['oferta']:.2f}"
-                inicio = oferta_data['data_inicio'].strftime('%d/%m')
-                fim = oferta_data['data_final'].strftime('%d/%m/%Y')
+                inicio = oferta_data['data_inicio'] # Pega como objeto data
+                fim = oferta_data['data_final']       # Pega como objeto data
                 
-                # Exibe a barra de sucesso com a oferta
-                st.success(f"🛍️ **OFERTA ATIVA:** Este item está em promoção por **{preco}** (Vigência: de {inicio} até {fim})")
+                inicio_str = inicio.strftime('%d/%m')
+                fim_str = fim.strftime('%d/%m/%Y')
+                
+                if today >= inicio:
+                    # A oferta está ativa HOJE
+                    st.success(f"🛍️ **OFERTA ATIVA:** Este item está em promoção por **{preco}** (Vigência: de {inicio_str} até {fim_str})")
+                else:
+                    # A oferta é FUTURA
+                    st.warning(f"📣 **OFERTA FUTURA:** Este item entrará em promoção por **{preco}** (Vigência: de {inicio_str} até {fim_str})")
         except Exception as e:
             # Se der erro (ex: múltiplas ofertas, o que não deve acontecer), ignora
             pass 
