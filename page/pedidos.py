@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date # MUDANÇA: Importado 'date'
 import json
 import re
 import os
 from sqlalchemy import create_engine, text
-import numpy as np # MUDANÇA: Necessário para arredondamento
+import numpy as np
 
 # =========================================================
 #  🧩 CONSTANTES E MAPEAMENTOS
@@ -17,29 +17,19 @@ WMS_FILE_PATH = 'data/WMS.xlsm'
 LISTA_LOJAS = ["001", "002", "003", "004", "005", "006",
                "007", "008", "011", "012", "013", "014", "017", "018"]
 
-# Mapeamento do Mix (como antes)
 COLS_MIX_MAP = {
     'CODIGOINT': 'Codigo', 'CODIGOEAN': 'EAN', 'DESCRICAO': 'Produto',
     'LOJA': 'Loja', 'EmbSeparacao': 'embseparacao'
 }
 
-# MUDANÇA: Mapeamento do Histórico (incluindo colunas G, H, I, J, K)
 COLS_HIST_MAP = {
-    'CODIGOINT': 'Codigo',
-    'LOJA': 'Loja',
-    'DtSolicitacao': 'Data',
-    'EstCX': 'Estoque_G',      # Coluna G: Estoque atual
-    'PedCX': 'Pedido_H',      # Coluna H: Ultimo pedido
-    'Vd1sem-CX': 'Venda_I',   # Coluna I: Venda 1 sem
-    'Vd2sem-CX': 'Venda_J',   # Coluna J: Venda 2 sem
-    'VM30dCX': 'Venda_K',     # Coluna K: Venda Média 30d
+    'CODIGOINT': 'Codigo', 'LOJA': 'Loja', 'DtSolicitacao': 'Data',
+    'EstCX': 'Estoque_G', 'PedCX': 'Pedido_H', 'Vd1sem-CX': 'Venda_I',
+    'Vd2sem-CX': 'Venda_J', 'VM30dCX': 'Venda_K',
 }
 
-# MUDANÇA: Mapeamento do WMS
 COLS_WMS_MAP = {
-    'codigo': 'Codigo',
-    'Qtd': 'Qtd_CD',
-    'datasalva': 'Data'
+    'codigo': 'Codigo', 'Qtd': 'Qtd_CD', 'datasalva': 'Data'
 }
 
 # =========================================================
@@ -51,8 +41,7 @@ def load_mix_data(file_path: str):
     try:
         df = pd.read_excel(file_path, dtype=str)
         df.rename(columns=COLS_MIX_MAP, inplace=True)
-        df['Codigo'] = pd.to_numeric(df['Codigo'], errors='coerce').fillna(
-            0).astype(int)
+        df['Codigo'] = pd.to_numeric(df['Codigo'], errors='coerce').fillna(0).astype(int)
         df['embseparacao'] = pd.to_numeric(
             df['embseparacao'].astype(str).str.split(
                 ',').str[0].str.split('.').str[0].str.strip(),
@@ -66,21 +55,15 @@ def load_mix_data(file_path: str):
 
 @st.cache_data
 def load_historico_data(file_path: str):
-    """MUDANÇA: Carrega dados do Histórico, incluindo colunas G a K."""
+    """Carrega dados do Histórico, incluindo colunas G a K."""
     try:
-        # Define as colunas que queremos ler
         use_cols = list(COLS_HIST_MAP.keys())
         df = pd.read_excel(file_path, sheet_name=0, usecols=use_cols)
-        
-        # Renomeia
         df.rename(columns=COLS_HIST_MAP, inplace=True)
-
-        # Limpa e converte tipos
         df['Codigo'] = pd.to_numeric(df['Codigo'], errors='coerce').fillna(0).astype(int)
         df['Loja'] = df['Loja'].astype(str).str.zfill(3)
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
         
-        # Converte todas as colunas de métrica (G-K) para número, tratando erros
         metric_cols = ['Estoque_G', 'Pedido_H', 'Venda_I', 'Venda_J', 'Venda_K']
         for col in metric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -93,7 +76,7 @@ def load_historico_data(file_path: str):
 
 @st.cache_data
 def load_wms_data(file_path: str):
-    """MUDANÇA: Carrega dados do WMS e filtra pelo último dia de upload."""
+    """Carrega dados do WMS e filtra pelo último dia de upload."""
     try:
         df = pd.read_excel(file_path, sheet_name='WMS', usecols=COLS_WMS_MAP.keys())
         df.rename(columns=COLS_WMS_MAP, inplace=True)
@@ -103,7 +86,6 @@ def load_wms_data(file_path: str):
         df['Qtd_CD'] = pd.to_numeric(df['Qtd_CD'], errors='coerce').fillna(0)
         df.dropna(subset=['Data'], inplace=True)
 
-        # MUDANÇA: Filtra apenas pela data mais recente do arquivo
         latest_date = df['Data'].max()
         df_latest = df[df['Data'] == latest_date]
         return df_latest
@@ -111,6 +93,28 @@ def load_wms_data(file_path: str):
     except Exception as e:
         st.error(f"Erro ao carregar WMS: {e}")
         return pd.DataFrame(columns=['Codigo', 'Qtd_CD', 'Data'])
+
+# MUDANÇA: Nova função para carregar ofertas ativas
+@st.cache_data(ttl=300) # Cache de 5 minutos
+def load_active_offers(_engine):
+    """Busca ofertas do banco de dados que estão ativas hoje."""
+    today = date.today()
+    query = text("""
+        SELECT codigo, oferta, data_inicio, data_final
+        FROM ofertas
+        WHERE :today >= data_inicio AND :today <= data_final
+    """)
+    try:
+        with _engine.connect() as conn:
+            df = pd.read_sql(query, conn, params={"today": today})
+        
+        # Indexa por código para busca rápida. Remove duplicados se houver.
+        if not df.empty:
+            df = df.drop_duplicates(subset=['codigo'], keep='last').set_index('codigo')
+        return df
+    except Exception as e:
+        st.error(f"Erro ao carregar ofertas: {e}")
+        return pd.DataFrame()
 
 # =========================================================
 #  💾 SALVAR PEDIDO NO BANCO (Sem alterações)
@@ -190,7 +194,6 @@ def show_pedidos_page(engine, base_data_path):
     if 'pedido_atual' not in st.session_state:
         st.session_state.pedido_atual = []
 
-    # MUDANÇA: Definindo os caminhos
     mix_file_path = os.path.join(base_data_path, "__MixAtivoSistema.xlsx")
     hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
     wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
@@ -198,7 +201,8 @@ def show_pedidos_page(engine, base_data_path):
     # Carrega todos os dados (funções cacheadas)
     df_mix = load_mix_data(mix_file_path)
     df_hist = load_historico_data(hist_file_path)
-    df_wms = load_wms_data(wms_file_path) # df_wms já vem filtrado pelo último dia
+    df_wms = load_wms_data(wms_file_path) 
+    df_ofertas = load_active_offers(engine) # MUDANÇA: Carrega ofertas ativas
 
     if df_mix.empty:
         st.warning("Falha ao carregar o Mix de Produtos.")
@@ -212,24 +216,12 @@ def show_pedidos_page(engine, base_data_path):
     st.subheader("1. Buscar Produto")
     df_mix_user = df_mix[df_mix['Loja'].isin(lojas_user)].copy()
 
-    tab1, tab2, tab3 = st.tabs(["Por Produto", "Por Código", "Por EAN"])
+    # MUDANÇA: Ordem das abas alterada
+    tab_cod, tab_prod, tab_ean = st.tabs(["Por Código", "Por Produto", "Por EAN"])
     prod_sel = None
 
-    with tab1:
-        busca_nome = st.text_input("Nome do Produto:")
-        if busca_nome:
-            res = df_mix_user[df_mix_user['Produto'].str.contains(
-                busca_nome, case=False, na=False)]
-            unicos = res.drop_duplicates(subset=['Codigo'])
-            unicos['Show'] = unicos['Produto'] + \
-                " (Cód: " + unicos['Codigo'].astype(str) + ")"
-            sel = st.selectbox(
-                "Selecione:", ["Selecione..."] + unicos['Show'].tolist())
-            if sel != "Selecione...":
-                cod = int(re.search(r'\(Cód: (\d+)\)', sel).group(1))
-                prod_sel = df_mix[df_mix['Codigo'] == cod].iloc[0]
-
-    with tab2:
+    with tab_cod:
+        # Lógica da "Por Código" (veio primeiro)
         busca_cod = st.text_input("Código:")
         if busca_cod:
             try:
@@ -242,7 +234,24 @@ def show_pedidos_page(engine, base_data_path):
             except ValueError:
                 st.warning("Código deve ser numérico.")
 
-    with tab3:
+    with tab_prod:
+        # Lógica da "Por Produto" (veio em segundo)
+        busca_nome = st.text_input("Nome do Produto:")
+        if busca_nome:
+            res = df_mix_user[df_mix_user['Produto'].str.contains(
+                busca_nome, case=False, na=False)]
+            unicos = res.drop_duplicates(subset=['Codigo'])
+            unicos['Show'] = unicos['Produto'] + \
+                " (Cód: " + unicos['Codigo'].astype(str) + ")"
+            sel = st.selectbox(
+                "Selecione:", ["Selecione..."] + unicos['Show'].tolist())
+            if sel != "Selecione...":
+                cod_str = re.search(r'\(Cód: (\d+)\)', sel).group(1)
+                cod = int(cod_str)
+                prod_sel = df_mix[df_mix['Codigo'] == cod].iloc[0]
+
+    with tab_ean:
+        # Lógica da "Por EAN" (veio em terceiro)
         busca_ean = st.text_input("EAN:")
         if busca_ean:
             res = df_mix[df_mix['EAN'] == busca_ean.strip()]
@@ -250,17 +259,17 @@ def show_pedidos_page(engine, base_data_path):
                 prod_sel = res.iloc[0]
             else:
                 st.warning("EAN não encontrado.")
+    # FIM DA MUDANÇA DE ORDEM
 
     st.markdown("---")
 
     if prod_sel is not None:
         st.subheader("2. Distribuir Quantidades (Caixas)")
         
-        # Converte tipos para a lógica
         cod = int(prod_sel['Codigo'])
         emb = int(prod_sel.get('embseparacao', 0))
 
-        # --- MUDANÇA: 1. LÓGICA DO ESTOQUE CD (BARRA AZUL) ---
+        # Lógica do Estoque CD (barra azul)
         stock_cd_units = df_wms[df_wms['Codigo'] == cod]['Qtd_CD'].sum()
         stock_display = "Esta em falta"
         
@@ -269,17 +278,32 @@ def show_pedidos_page(engine, base_data_path):
             if stock_cd_cases > 0:
                 stock_display = f"{stock_cd_cases:,.0f} CX"
         
+        # Barra de informação padrão
         st.info(f"**Item:** {prod_sel['Produto']} (Cód: {cod}) | **Emb:** {emb} un/cx | **Estoque CD:** {stock_display}")
         
-        # --- MUDANÇA: 2. PREPARAR DADOS HISTÓRICOS PARA O ITEM ---
-        # Filtra o histórico (do último dia) para este item
+        # MUDANÇA: Lógica para buscar e exibir a oferta
+        try:
+            if not df_ofertas.empty and cod in df_ofertas.index:
+                # .loc[cod] pega a linha onde o índice é o código do produto
+                oferta_data = df_ofertas.loc[cod] 
+                preco = f"R$ {oferta_data['oferta']:.2f}"
+                inicio = oferta_data['data_inicio'].strftime('%d/%m')
+                fim = oferta_data['data_final'].strftime('%d/%m/%Y')
+                
+                # Exibe a barra de sucesso com a oferta
+                st.success(f"🛍️ **OFERTA ATIVA:** Este item está em promoção por **{preco}** (Vigência: de {inicio} até {fim})")
+        except Exception as e:
+            # Se der erro (ex: múltiplas ofertas, o que não deve acontecer), ignora
+            pass 
+        # FIM DA MUDANÇA DA OFERTA
+
+        # Preparar dados históricos para o item
         if not df_hist.empty:
             latest_hist_date = df_hist['Data'].max()
             df_hist_item = df_hist[
                 (df_hist['Codigo'] == cod) & 
                 (df_hist['Data'] == latest_hist_date)
             ]
-            # Cria um "mapa" Loja -> Dados para busca rápida
             hist_item_map = df_hist_item.set_index('Loja').to_dict('index')
             data_atualizacao = latest_hist_date.strftime('%d/%m/%Y')
         else:
@@ -290,15 +314,12 @@ def show_pedidos_page(engine, base_data_path):
             qtys, total = {}, 0
             cols = st.columns(min(len(lojas_user), 3))
             
-            # --- MUDANÇA: 3. LÓGICA DE SUGESTÃO E CAPTION ---
             for i, loja in enumerate(lojas_user):
                 col_render = cols[i % len(cols)]
                 
-                # Valores padrão
                 sugestao_int = 0
                 caption_text = f"Sem dados históricos (Atu: {data_atualizacao})"
                 
-                # Busca dados históricos da loja
                 if loja in hist_item_map:
                     row = hist_item_map[loja]
                     est_g = row['Estoque_G']
@@ -307,32 +328,26 @@ def show_pedidos_page(engine, base_data_path):
                     vd_j = row['Venda_J']
                     vm_k = row['Venda_K']
                     
-                    # Calcular sugestão: (Venda Média / 7 dias * 4 dias de previsão) - Estoque Atual
                     sugestao_float = (vm_k / 7 * 4) - est_g
-                    
-                    # Arredonda para o inteiro mais próximo
                     sugestao_int = int(np.round(sugestao_float)) 
                     
                     if sugestao_int < 1:
-                        sugestao_int = 0 # Não sugere menos que 1 caixa
+                        sugestao_int = 0 
                     
-                    # Formata o caption
                     caption_text = (
                         f"Est: {est_g:.1f} | Ult.Ped: {ped_h:.0f} | "
                         f"Vd1: {vd_i:.1f} | Vd2: {vd_j:.1f} | VM30: {vm_k:.1f} | "
                         f"(Atu: {data_atualizacao})"
                     )
 
-                # Renderiza o campo de número com a sugestão pré-preenchida
                 q = col_render.number_input(
                     f"Loja {loja}", 
                     min_value=0, 
                     step=1, 
-                    value=sugestao_int,  # <-- SUGESTÃO AQUI
+                    value=sugestao_int,
                     key=f"q_{cod}_{loja}"
                 )
                 
-                # Renderiza o caption
                 col_render.caption(caption_text)
                 
                 if q > 0:
