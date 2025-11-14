@@ -24,16 +24,14 @@ def get_admin_tickets(engine):
     query_open = text("""
         SELECT id, usuario_username, assunto, status, ultimo_update 
         FROM contato_chamados
-        WHERE status = 'Aberto' OR status = 'Respondido'
-        ORDER BY ultimo_update ASC
-    """)
-    
-    # MUDANÇA: Removida a query de chamados fechados
+        WHERE status = 'Aguardando Retorno' OR status = 'Respondido'
+        ORDER BY data_criacao ASC 
+    """) # MUDANÇA: Status 'Aberto' -> 'Aguardando Retorno'
+       # MUDANÇA: ORDER BY ultimo_update -> data_criacao
     
     with engine.connect() as conn:
         df_open = pd.read_sql_query(query_open, conn)
         
-    # MUDANÇA: Retorna apenas os chamados abertos
     return df_open
 
 def create_new_ticket(engine, username, assunto, mensagem):
@@ -44,9 +42,9 @@ def create_new_ticket(engine, username, assunto, mensagem):
             # 1. Cria o chamado
             query_ticket = text("""
                 INSERT INTO contato_chamados (usuario_username, assunto, data_criacao, ultimo_update, status)
-                VALUES (:username, :assunto, :now, :now, 'Aberto')
+                VALUES (:username, :assunto, :now, :now, 'Aguardando Retorno')
                 RETURNING id;
-            """)
+            """) # MUDANÇA: Status 'Aberto' -> 'Aguardando Retorno'
             result = conn.execute(query_ticket, {"username": username, "assunto": assunto, "now": now})
             new_ticket_id = result.scalar_one()
             
@@ -110,7 +108,19 @@ def add_message_to_ticket(engine, ticket_id, username, mensagem, new_status):
         st.error(f"Erro ao enviar mensagem: {e}")
         return False
 
-# MUDANÇA: Removida a função 'close_ticket'
+# MUDANÇA: Nova função para deletar o chamado
+def delete_ticket(engine, ticket_id):
+    """Exclui um chamado e suas mensagens (via CASCADE)."""
+    try:
+        with engine.begin() as conn:
+            # Graças ao "ON DELETE CASCADE" no app.py,
+            # deletar o chamado também deleta as mensagens.
+            query = text("DELETE FROM contato_chamados WHERE id = :ticket_id")
+            conn.execute(query, {"ticket_id": ticket_id})
+        return True
+    except Exception as e:
+        st.error(f"Erro ao excluir chamado: {e}")
+        return False
 
 # =========================================================
 # INTERFACE DA PÁGINA
@@ -119,19 +129,28 @@ def add_message_to_ticket(engine, ticket_id, username, mensagem, new_status):
 def show_chat_view(engine, ticket_id, role, username):
     """Mostra a interface de chat para um ticket selecionado."""
     
-    # Botão para voltar
-    if st.button("← Voltar para lista de chamados"):
-        if 'selected_ticket_id' in st.session_state:
-            del st.session_state['selected_ticket_id']
-        st.rerun()
+    # MUDANÇA: Botões de Voltar e Solucionar lado a lado
+    col1, col2, _ = st.columns([1, 2, 2])
+    
+    with col1:
+        if st.button("← Voltar"):
+            if 'selected_ticket_id' in st.session_state:
+                del st.session_state['selected_ticket_id']
+            st.rerun()
+
+    with col2:
+        # MUDANÇA: Novo botão para excluir o chamado
+        if st.button("✅ Solucionado (Excluir Chamado)", type="primary"):
+            if delete_ticket(engine, ticket_id):
+                st.success("Chamado excluído com sucesso!")
+                if 'selected_ticket_id' in st.session_state:
+                    del st.session_state['selected_ticket_id']
+                st.rerun()
 
     messages = get_ticket_messages(engine, ticket_id)
     
     # Exibe o histórico de chat
     for _, row in messages.iterrows():
-        # Define o avatar (pessoa ou admin)
-        # Se o remetente for o usuário logado, avatar de "pessoa"
-        # Se for outra pessoa (o admin), avatar de "escudo"
         avatar = "🧑‍💻" if row['remetente_username'] == username else "🛡️"
         
         # O nome exibido é o 'remetente_username' real
@@ -142,8 +161,8 @@ def show_chat_view(engine, ticket_id, role, username):
     # Input para nova mensagem
     prompt = st.chat_input("Digite sua resposta...")
     if prompt:
-        # Define o novo status baseado em quem está respondendo
-        new_status = "Respondido" if role == "admin" else "Aberto"
+        # MUDANÇA: Status 'Aberto' -> 'Aguardando Retorno'
+        new_status = "Respondido" if role == "admin" else "Aguardando Retorno"
         
         if add_message_to_ticket(engine, ticket_id, username, prompt, new_status):
             st.rerun()
@@ -153,41 +172,42 @@ def show_chat_view(engine, ticket_id, role, username):
 # --- PÁGINA PRINCIPAL ---
 
 def show_contato_page(engine, base_data_path):
-    st.title("Contato com a Supply Chain")
+    st.title("Contato") # MUDANÇA: Título atualizado
     
     role = st.session_state.get("role", "user")
     username = st.session_state.get("username", "")
 
-    # Se um ticket foi selecionado, mostra o chat
     if 'selected_ticket_id' in st.session_state:
         ticket_id = st.session_state['selected_ticket_id']
         show_chat_view(engine, ticket_id, role, username)
     
-    # Senão, mostra a lista de tickets (visão de Admin ou Usuário)
     else:
         if role == "admin":
             st.subheader("Painel de Chamados (Admin)")
-            
-            # MUDANÇA: Recebe apenas df_open
             df_open = get_admin_tickets(engine)
             
-            st.markdown("##### Chamados Ativos (Abertos / Respondidos)")
+            # MUDANÇA: Nomenclatura atualizada
+            st.markdown("##### Chamados Ativos (Aguardando Retorno / Respondidos)")
             if df_open.empty:
                 st.info("Nenhum chamado ativo.")
             else:
                 for _, row in df_open.iterrows():
+                    # MUDANÇA: Altera cor do status para destaque
+                    status = row['status']
+                    if status == 'Aguardando Retorno':
+                        status_colorido = f":orange[{status}]"
+                    else:
+                        status_colorido = f":blue[{status}]"
+                        
                     col1, col2, col3, col4 = st.columns([1, 2, 1, 1])
                     col1.text(row['usuario_username'])
                     col2.text(row['assunto'])
-                    col3.text(row['status'])
+                    col3.markdown(status_colorido, unsafe_allow_html=True)
                     if col4.button("Ver", key=f"view_{row['id']}"):
                         st.session_state['selected_ticket_id'] = row['id']
                         st.rerun()
 
-            # MUDANÇA: Removido o expander "Ver Chamados Fechados"
-
         else:
-            # --- VISÃO DO USUÁRIO ---
             st.subheader("Novo Chamado")
             with st.form("new_ticket_form", clear_on_submit=True):
                 assunto = st.text_input("Assunto")
@@ -214,9 +234,16 @@ def show_contato_page(engine, base_data_path):
             else:
                 st.write("Clique em 'Ver' para abrir a conversa.")
                 for _, row in df_user_tickets.iterrows():
+                    # MUDANÇA: Altera cor do status para destaque
+                    status = row['status']
+                    if status == 'Aguardando Retorno':
+                        status_colorido = f":orange[{status}]"
+                    else:
+                        status_colorido = f":blue[{status}]"
+
                     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
                     col1.text(row['assunto'])
-                    col2.text(row['status'])
+                    col2.markdown(status_colorido, unsafe_allow_html=True)
                     col3.text(row['ultimo_update'].strftime('%d/%m/%Y'))
                     if col4.button("Ver", key=f"view_{row['id']}"):
                         st.session_state['selected_ticket_id'] = row['id']
