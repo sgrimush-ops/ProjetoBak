@@ -110,9 +110,10 @@ def create_db_tables():
                     assunto TEXT,
                     data_criacao TIMESTAMP,
                     ultimo_update TIMESTAMP,
-                    status TEXT DEFAULT 'Aberto' 
+                    status TEXT DEFAULT 'Aguardando Retorno' 
                 )
-            """))
+            """)) # MUDANÇA: Status 'Aberto' -> 'Aguardando Retorno'
+            
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS contato_mensagens (
                     id SERIAL PRIMARY KEY,
@@ -139,13 +140,7 @@ def create_db_tables():
             # --- Lógica de Auto-Deleção (Limpeza de 7 dias Contato) ---
             seven_days_ago = (datetime.now() - pd.Timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
             
-            conn.execute(text("""
-                DELETE FROM contato_mensagens 
-                WHERE chamado_id IN (
-                    SELECT id FROM contato_chamados 
-                    WHERE ultimo_update < :seven_days_ago
-                )
-            """), {"seven_days_ago": seven_days_ago})
+            # Não precisamos mais de 'DELETE FROM contato_mensagens' por causa do ON DELETE CASCADE
             
             conn.execute(text("""
                 DELETE FROM contato_chamados 
@@ -153,8 +148,8 @@ def create_db_tables():
             """), {"seven_days_ago": seven_days_ago})
             
     except Exception as e:
-        if "foreign key constraint" not in str(e):
-            st.error(f"Erro ao inicializar o banco de dados: {e}")
+        if "foreign key constraint" not in str(e) and "does not exist" not in str(e):
+             st.error(f"Erro ao inicializar o banco de dados: {e}")
 
 # =========================================================
 # LOGIN E PERFIL DE USUÁRIO
@@ -226,13 +221,13 @@ def check_if_first_run(engine):
             count = result.scalar_one_or_none() or 0
         return count == 0
     except Exception as e:
-        if "does not exist" in str(e):
+        if "does not exist" in str(e): # Se a tabela 'users' ainda não foi criada
             return True
         st.error(f"Erro ao verificar contagem de usuários: {e}")
         return False
 
 # =========================================================
-# MUDANÇA: NOVA FUNÇÃO DE CONTAGEM DE MENSAGENS
+# FUNÇÃO DE CONTAGEM DE MENSAGENS
 # =========================================================
 @st.cache_data(ttl=60) # Cache de 1 minuto
 def get_unread_message_count(_engine, username, role):
@@ -241,10 +236,10 @@ def get_unread_message_count(_engine, username, role):
     params = {}
     
     if role == "admin":
-        # Admin vê tickets 'Abertos' (que o usuário enviou)
-        query_str = "SELECT COUNT(id) FROM contato_chamados WHERE status = 'Aberto'"
+        # Admin vê tickets 'Aguardando Retorno'
+        query_str = "SELECT COUNT(id) FROM contato_chamados WHERE status = 'Aguardando Retorno'"
     else:
-        # Usuário vê tickets 'Respondidos' (que o admin enviou)
+        # Usuário vê tickets 'Respondidos'
         query_str = "SELECT COUNT(id) FROM contato_chamados WHERE status = 'Respondido' AND usuario_username = :username"
         params = {"username": username}
 
@@ -257,7 +252,9 @@ def get_unread_message_count(_engine, username, role):
             count = result.scalar_one_or_none() or 0
         return count
     except Exception as e:
-        print(f"Erro ao buscar contagem de mensagens: {e}") # Loga o erro no console
+        # Se as tabelas ainda não existem, não falha
+        if "does not exist" not in str(e):
+            print(f"Erro ao buscar contagem de mensagens: {e}") 
         return 0
 
 # =========================================================
@@ -289,60 +286,52 @@ def main():
         st.session_state["logged_in"] = False
         st.rerun()
 
-    # --- MUDANÇA: Lógica de Notificação de Contato ---
+    # --- Lógica de Notificação de Contato ---
     username = st.session_state.get("username", "")
     role = st.session_state.get("role", "user")
     
-    # Busca a contagem de mensagens (usando a nova função)
     unread_count = get_unread_message_count(engine, username, role)
     
-    # Cria o nome do menu dinamicamente
     contato_menu_label = "Contato"
     if unread_count > 0:
-        contato_menu_label = f"Contato ({unread_count}) 🔴" # Adiciona contagem e círculo
+        contato_menu_label = f"Contato ({unread_count}) 🔴"
 
     # --- MENU LATERAL ---
-    # Mapeamento para o radio (com labels dinâmicas)
     paginas_disponiveis_labels = {
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
         "Histórico de Transferencia CD": show_historico_page,
         "Ofertas Atuais": show_ver_ofertas_page,
         "Alterar Senha": show_mudar_senha_page,
-        contato_menu_label: show_contato_page, # <-- MUDANÇA: Label dinâmica
+        contato_menu_label: show_contato_page, 
     }
 
-    # Menu para quem digita pedido
     if st.session_state.get("lojas_acesso"):
         paginas_disponiveis_labels["Digitar Pedidos"] = show_pedidos_page
 
-    # Menu específico de Marketing (MKT)
     if st.session_state.get("role") == "mkt":
         paginas_disponiveis_labels["Upload Ofertas"] = show_upload_ofertas_page
     
-    # Menu de Admin
     if st.session_state.get("role") == "admin":
         paginas_disponiveis_labels["Aprovação de Pedidos"] = show_aprovacao_page
         paginas_disponiveis_labels["Status do Usuário"] = show_status_page
         paginas_disponiveis_labels["Administração"] = show_admin_page
         paginas_disponiveis_labels["Atualização de Dependências"] = show_admin_tools
-        if "Upload Ofertas" not in paginas_disponiveis_labels: # Evita duplicar
+        if "Upload Ofertas" not in paginas_disponiveis_labels:
             paginas_disponiveis_labels["Upload Ofertas"] = show_upload_ofertas_page
 
     
-    # --- MUDANÇA: Lógica de Navegação Atualizada ---
+    # --- Lógica de Navegação Atualizada ---
     page_list_labels = list(paginas_disponiveis_labels.keys())
 
-    # 'page_key' armazena a *label* selecionada (ex: "Contato (2) 🔴")
     if "page_key" not in st.session_state:
         st.session_state.page_key = "Home"
     
-    # Se a label mudou (ex: de "Contato" para "Contato (1) 🔴"), atualiza a seleção
     if st.session_state.page_key not in page_list_labels:
         if "Contato" in st.session_state.page_key:
-            st.session_state.page_key = contato_menu_label # Força a nova label
+            st.session_state.page_key = contato_menu_label 
         else:
-            st.session_state.page_key = "Home" # Fallback
+            st.session_state.page_key = "Home" 
 
     def update_sidebar_selection():
         st.session_state.page_key = st.session_state["sidebar_radio_key"]
@@ -357,10 +346,7 @@ def main():
         key="sidebar_radio_key"
     )
     
-    # Pega a função de página correspondente à label selecionada
     selected_page_func = paginas_disponiveis_labels[st.session_state.page_key]
-    
-    # Executa a função
     selected_page_func(engine=engine, base_data_path=BASE_DATA_PATH)
 
 
