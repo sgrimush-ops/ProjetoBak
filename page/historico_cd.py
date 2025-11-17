@@ -7,13 +7,15 @@ import re
 import numpy as np 
 
 # --- Configurações Iniciais ---
+
+# MUDANÇA: Adicionada a coluna 'Situacao' (assumindo o nome)
 COL_HIST_CODIGO = 'CODIGOINT'
 COL_HIST_EMBALAGEM = 'EmbSeparacao'
 COL_HIST_ESTOQUE_LOJA = 'EstCX'
 COL_HIST_PEDIDOS = 'PedCX'
 COL_HIST_DATA = 'DtSolicitacao'
 COL_HIST_DESCRICAO = 'Produto'
-COL_HIST_SITUACAO = 'Situacao' 
+COL_HIST_SITUACAO = 'Situacao' # MUDANÇA: Assumindo que este é o nome da coluna
 
 COL_WMS_CODIGO = 'codigo'
 COL_WMS_QTD = 'Qtd'
@@ -29,8 +31,7 @@ MESES_INVERSO = {v: k for k, v in MESES_DISPONIVEIS.items()}
 # --- Funções de Carregamento de Dados (Cacheadas) ---
 
 @st.cache_data
-# MUDANÇA: Adicionado 'mod_time' para invalidar o cache
-def load_wms_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
+def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
     """Carrega DADOS COMPLETOS do WMS (estoque do CD)."""
     try:
         df = pd.read_excel(
@@ -57,10 +58,10 @@ def load_wms_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
         return None
 
 @st.cache_data
-# MUDANÇA: Adicionado 'mod_time' para invalidar o cache
-def load_hist_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
+def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
     """Carrega dados do Histórico de Solicitações (Lojas)."""
     try:
+        # MUDANÇA: Adiciona COL_HIST_SITUACAO às colunas de leitura
         df = pd.read_excel(
             file_path,
             sheet_name=0, 
@@ -78,7 +79,7 @@ def load_hist_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
             COL_HIST_ESTOQUE_LOJA: 'Estoque_Lojas',
             COL_HIST_PEDIDOS: 'Pedidos',
             COL_HIST_DATA: 'Data',
-            COL_HIST_SITUACAO: 'Situacao'
+            COL_HIST_SITUACAO: 'Situacao' # MUDANÇA
         }, inplace=True)
         
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
@@ -89,6 +90,8 @@ def load_hist_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
         df['Estoque_Lojas'] = pd.to_numeric(df['Estoque_Lojas'], errors='coerce').fillna(0)
         df['Pedidos'] = pd.to_numeric(df['Pedidos'], errors='coerce').fillna(0)
         df['Embalagem'] = pd.to_numeric(df['Embalagem'], errors='coerce')
+        
+        # MUDANÇA: Garante que a coluna Situacao seja string para comparação
         df['Situacao'] = df['Situacao'].astype(str).str.strip()
         
         return df
@@ -105,22 +108,8 @@ def show_historico_page(engine, base_data_path):
     hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
     wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
 
-    # MUDANÇA: Pega a hora da última modificação dos arquivos
-    try:
-        hist_mod_time = os.path.getmtime(hist_file_path)
-    except FileNotFoundError:
-        st.error(f"Arquivo '{hist_file_path}' não encontrado. Faça o upload na página de Admin.")
-        return
-    try:
-        wms_mod_time = os.path.getmtime(wms_file_path)
-    except FileNotFoundError:
-        st.error(f"Arquivo '{wms_file_path}' não encontrado. Faça o upload na página de Admin.")
-        return
-
-    # MUDANÇA: Passa a hora da modificação para as funções de load
-    df_hist_full = load_hist_data(hist_file_path, hist_mod_time)
-    df_wms_full = load_wms_data(wms_file_path, wms_mod_time)
-
+    df_hist_full = load_hist_data(hist_file_path)
+    df_wms_full = load_wms_data(wms_file_path)
 
     if df_hist_full is None or df_wms_full is None:
         st.error("Falha ao carregar um ou mais arquivos de dados. Verifique os uploads.")
@@ -177,36 +166,37 @@ def show_historico_page(engine, base_data_path):
     item_selecionado_display = "Digite algo para buscar..."
 
     with tab1:
-        # Verifica se a coluna 'Descricao' existe antes de usá-la
-        if 'Descricao' in df_hist_mensal.columns:
-            df_hist_mensal['Display'] = df_hist_mensal['Descricao'].astype(str) + " (Código: " + df_hist_mensal['Codigo'].astype(str) + ")"
-            descricao_busca = st.text_input("Digite a descrição ou parte dela:")
-            
-            if descricao_busca:
-                resultados_parciais = df_hist_mensal[df_hist_mensal['Descricao'].str.contains(descricao_busca, case=False, na=False)]
-                opcoes_unicas = resultados_parciais.drop_duplicates(subset=['Codigo'])
-                lista_opcoes = ["Selecione um item..."] + opcoes_unicas['Display'].tolist()
-            else:
-                lista_opcoes = ["Digite algo para buscar..."]
-
-            item_selecionado_display = st.selectbox("Selecione o produto na lista:", lista_opcoes)
-            
-            if item_selecionado_display and item_selecionado_display not in ["Selecione um item...", "Digite algo para buscar..."]:
-                try:
-                    codigo_para_filtrar = int(re.search(r'\(Código: (\d+)\)', item_selecionado_display).group(1))
-                except (AttributeError, ValueError):
-                    st.error("Não foi possível extrair o código do item selecionado.")
+        # Garante que 'Descricao' seja string antes de usar .str.contains
+        df_hist_mensal['Descricao'] = df_hist_mensal['Descricao'].astype(str)
+        df_hist_mensal['Display'] = df_hist_mensal['Descricao'] + " (Código: " + df_hist_mensal['Codigo'].astype(str) + ")"
+        descricao_busca = st.text_input("Digite a descrição ou parte dela:")
+        
+        if descricao_busca:
+            resultados_parciais = df_hist_mensal[df_hist_mensal['Descricao'].str.contains(descricao_busca, case=False, na=False)]
+            opcoes_unicas = resultados_parciais.drop_duplicates(subset=['Codigo'])
+            lista_opcoes = ["Selecione um item..."] + opcoes_unicas['Display'].tolist()
         else:
-            st.warning("Coluna 'Descricao' (Produto) não encontrada no arquivo historico_solic.xlsm.")
+            lista_opcoes = ["Digite algo para buscar..."]
 
+        item_selecionado_display = st.selectbox("Selecione o produto na lista:", lista_opcoes)
+        
+        if item_selecionado_display and item_selecionado_display not in ["Selecione um item...", "Digite algo para buscar..."]:
+            try:
+                codigo_para_filtrar = int(re.search(r'\(Código: (\d+)\)', item_selecionado_display).group(1))
+            except (AttributeError, ValueError):
+                st.error("Não foi possível extrair o código do item selecionado.")
 
     with tab2:
         codigo_busca_direta = st.text_input("Ou digite o Código (apenas números):")
         if codigo_busca_direta:
             try:
                 codigo_para_filtrar = int(codigo_busca_direta)
-                nome_item = df_hist_full[df_hist_full['Codigo'] == codigo_para_filtrar]['Descricao'].iloc[0]
-                item_selecionado_display = f"{nome_item} (Código: {codigo_para_filtrar})"
+                nome_item_df = df_hist_full[df_hist_full['Codigo'] == codigo_para_filtrar]['Descricao']
+                if not nome_item_df.empty:
+                    nome_item = nome_item_df.iloc[0]
+                    item_selecionado_display = f"{nome_item} (Código: {codigo_para_filtrar})"
+                else:
+                    item_selecionado_display = f"Código: {codigo_para_filtrar}"
             except (ValueError, IndexError):
                 st.warning("Código não encontrado no histórico.")
 
@@ -219,11 +209,16 @@ def show_historico_page(engine, base_data_path):
     if codigo_para_filtrar:
         st.subheader(f"Análise: {item_selecionado_display}")
         
-        # --- Lógica do Histórico (Lojas/Pedidos) ---
         df_item_hist = df_hist_mensal[df_hist_mensal['Codigo'] == codigo_para_filtrar].copy()
         
+        if df_item_hist.empty:
+             st.warning("Produto não encontrado nos dados históricos do mês selecionado.")
+             return
+        
+        # MUDANÇA: A condição agora checa se 'Situacao' é '1' OU '7'
+        condicao_nao_atendido = df_item_hist['Situacao'].isin(['1', '7'])
         df_item_hist['Nao_Atendido_Qtde'] = np.where(
-            df_item_hist['Situacao'] == '7', df_item_hist['Situacao'] == '1', df_item_hist['Pedidos'], 0
+            condicao_nao_atendido, df_item_hist['Pedidos'], 0
         )
         
         df_lojas_grafico = df_item_hist.groupby(df_item_hist['Data'].dt.date).agg(
@@ -232,7 +227,6 @@ def show_historico_page(engine, base_data_path):
             Nao_Atendido_Item=('Nao_Atendido_Qtde', 'sum') 
         ).reset_index().rename(columns={'Data': 'Dia'})
 
-        # --- Lógica do WMS (Estoque CD) ---
         df_item_wms = df_wms_mensal[df_wms_mensal['Codigo'] == codigo_para_filtrar]
         df_cd_grafico = df_item_wms.groupby(df_item_wms['Data'].dt.date).agg(
             Estoque_CD_Unidades=('Qtd_CD', 'sum')
@@ -245,10 +239,8 @@ def show_historico_page(engine, base_data_path):
             else:
                 df_cd_grafico['Estoque_CD_Item'] = 0
         except KeyError:
-            # st.warning(f"Não foi encontrada embalagem para o código {codigo_para_filtrar}. Estoque CD será 0.")
             df_cd_grafico['Estoque_CD_Item'] = 0
             
-        # --- Junção dos Dados ---
         if not df_cd_grafico.empty:
             df_cd_grafico = df_cd_grafico[['Dia', 'Estoque_CD_Item']]
             df_final_grafico = pd.merge(df_lojas_grafico, df_cd_grafico, on='Dia', how='outer')
@@ -256,15 +248,15 @@ def show_historico_page(engine, base_data_path):
             df_final_grafico = df_lojas_grafico.copy()
             df_final_grafico['Estoque_CD_Item'] = 0
         
-        # Preenche valores ausentes (NaN) com 0 para o gráfico
         df_final_grafico.fillna(0, inplace=True)
             
     else:
-        # 2. ANÁLISE TOTAL
         st.subheader(f"Análise Total - {mes_selecionado}/{ano_selecionado}")
         
+        # MUDANÇA: A condição agora checa se 'Situacao' é '1' OU '7'
+        condicao_nao_atendido_total = df_hist_mensal['Situacao'].isin(['1', '7'])
         df_hist_mensal['Nao_Atendido_Qtde'] = np.where(
-            df_hist_mensal['Situacao'] == '7', df_hist_mensal['Pedidos'], 0
+            condicao_nao_atendido_total, df_hist_mensal['Pedidos'], 0
         )
         
         df_final_grafico = df_hist_mensal.groupby(df_hist_mensal['Data'].dt.date).agg(
@@ -278,7 +270,9 @@ def show_historico_page(engine, base_data_path):
     # Exibe o gráfico de linhas
     if not df_final_grafico.empty:
         
-        df_final_grafico['Dia'] = pd.to_datetime(df_final_grafico['Dia']).dt.strftime('%d/%m')
+        # MUDANÇA: FORMATAR EIXO X (converte data para string)
+        # Converte a coluna 'Dia' (que são objetos date) para strings formatadas
+        df_final_grafico['Dia_str'] = pd.to_datetime(df_final_grafico['Dia']).dt.strftime('%d/%m')
         
         colunas_y = []
         cores_hex = []
@@ -311,13 +305,12 @@ def show_historico_page(engine, base_data_path):
             colunas_y.append('Total_Nao_Atendido')
             cores_hex.append('#FF0000') # Vermelho
         
-        # Define 'Dia' como índice para st.line_chart se 'Dia' for o eixo x
-        if 'Dia' in df_final_grafico.columns:
-            df_final_grafico = df_final_grafico.set_index('Dia')
+        # MUDANÇA: Usar a coluna string 'Dia_str' como índice
+        if 'Dia_str' in df_final_grafico.columns:
+            df_final_grafico = df_final_grafico.set_index('Dia_str')
             
         st.line_chart(
-            df_final_grafico,
-            y=colunas_y,
+            df_final_grafico[colunas_y], # MUDANÇA: Passa apenas as colunas Y
             color=cores_hex
         )
         
@@ -325,4 +318,7 @@ def show_historico_page(engine, base_data_path):
             st.dataframe(df_final_grafico)
     else:
         st.warning("Nenhum dado encontrado para exibir no gráfico.")
+    else:
+        st.warning("Nenhum dado encontrado para exibir no gráfico.")
+
 
