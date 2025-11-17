@@ -7,7 +7,7 @@ import re
 import numpy as np 
 
 # --- Configurações Iniciais ---
-
+# (Nomes das colunas permanecem os mesmos)
 COL_HIST_CODIGO = 'CODIGOINT'
 COL_HIST_EMBALAGEM = 'EmbSeparacao'
 COL_HIST_ESTOQUE_LOJA = 'EstCX'
@@ -15,11 +15,9 @@ COL_HIST_PEDIDOS = 'PedCX'
 COL_HIST_DATA = 'DtSolicitacao'
 COL_HIST_DESCRICAO = 'Produto'
 COL_HIST_SITUACAO = 'Situacao' 
-
 COL_WMS_CODIGO = 'codigo'
 COL_WMS_QTD = 'Qtd'
 COL_WMS_DATA = 'datasalva'
-
 MESES_DISPONIVEIS = {
     "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4, "Maio": 5, "Junho": 6,
     "Julho": 7, "Agosto": 8, "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
@@ -29,9 +27,12 @@ MESES_INVERSO = {v: k for k, v in MESES_DISPONIVEIS.items()}
 
 # --- Funções de Carregamento de Dados (Cacheadas) ---
 
+# MUDANÇA: Adicionado 'mod_time' à assinatura da função.
+# O Streamlit usará isso como parte da "chave" do cache.
 @st.cache_data
-def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
+def load_wms_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
     """Carrega DADOS COMPLETOS do WMS (estoque do CD)."""
+    # 'mod_time' não é usado aqui dentro, mas sua presença quebra o cache.
     try:
         df = pd.read_excel(
             file_path,
@@ -56,9 +57,11 @@ def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
         st.error(f"Erro ao carregar o arquivo WMS ({file_path}): {e}")
         return None
 
+# MUDANÇA: Adicionado 'mod_time' à assinatura da função.
 @st.cache_data
-def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
+def load_hist_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
     """Carrega dados do Histórico de Solicitações (Lojas)."""
+    # 'mod_time' não é usado aqui dentro, mas sua presença quebra o cache.
     try:
         df = pd.read_excel(
             file_path,
@@ -105,9 +108,22 @@ def show_historico_page(engine, base_data_path):
     hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
     wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
 
-    df_hist_full = load_hist_data(hist_file_path)
-    df_wms_full = load_wms_data(wms_file_path)
+    # MUDANÇA: Obter a data de modificação dos arquivos
+    try:
+        hist_mod_time = os.path.getmtime(hist_file_path)
+        wms_mod_time = os.path.getmtime(wms_file_path)
+    except FileNotFoundError:
+        st.error("Arquivos de dados (WMS ou Histórico) não encontrados. Faça o upload na página 'Atualização de Dependências'.")
+        return
+    except Exception as e:
+        st.error(f"Erro ao verificar arquivos de dados: {e}")
+        return
 
+    # MUDANÇA: Passar a data de modificação para as funções de load
+    df_hist_full = load_hist_data(hist_file_path, hist_mod_time)
+    df_wms_full = load_wms_data(wms_file_path, wms_mod_time)
+
+    
     if df_hist_full is None or df_wms_full is None:
         st.error("Falha ao carregar um ou mais arquivos de dados. Verifique os uploads.")
         return
