@@ -223,7 +223,7 @@ def show_historico_page(engine, base_data_path):
         df_item_hist = df_hist_mensal[df_hist_mensal['Codigo'] == codigo_para_filtrar].copy()
         
         df_item_hist['Nao_Atendido_Qtde'] = np.where(
-            df_item_hist['Situacao'] == '7', df_item_hist['Pedidos'], 0
+            df_item_hist['Situacao'] == '7', df_item_hist['Situacao'] == '1', df_item_hist['Pedidos'], 0
         )
         
         df_lojas_grafico = df_item_hist.groupby(df_item_hist['Data'].dt.date).agg(
@@ -325,3 +325,4 @@ def show_historico_page(engine, base_data_path):
             st.dataframe(df_final_grafico)
     else:
         st.warning("Nenhum dado encontrado para exibir no gráfico.")
+
