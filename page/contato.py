@@ -1,7 +1,7 @@
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime
-import pandas as pd
+import pandas as pd # <--- ESTA LINHA ESTAVA FALTANDO NO SEU DEPLOY
 
 # =========================================================
 # FUNÇÕES DE BANCO DE DADOS (Específicas do Contato)
