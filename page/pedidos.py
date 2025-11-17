@@ -35,8 +35,9 @@ COLS_WMS_MAP = {
 # =========================================================
 #  📂 FUNÇÕES DE LEITURA DE DADOS (COM CACHE)
 # =========================================================
+# MUDANÇA: Adicionado 'mod_time' para quebrar o cache em novo upload
 @st.cache_data
-def load_mix_data(file_path: str):
+def load_mix_data(file_path: str, mod_time: float):
     """Carrega dados do Mix de produtos."""
     try:
         df = pd.read_excel(file_path, dtype=str)
@@ -53,9 +54,10 @@ def load_mix_data(file_path: str):
         st.error(f"Erro ao carregar Mix: {e}")
         return pd.DataFrame()
 
+# MUDANÇA: Adicionado 'mod_time' para quebrar o cache em novo upload
 @st.cache_data
-def load_historico_data(file_path: str):
-    """Carrega dados do Histórico, incluindo colunas G a K."""
+def load_historico_data(file_path: str, mod_time: float):
+    """MUDANÇA: Carrega dados do Histórico, incluindo colunas G a K."""
     try:
         use_cols = list(COLS_HIST_MAP.keys())
         df = pd.read_excel(file_path, sheet_name=0, usecols=use_cols)
@@ -74,9 +76,10 @@ def load_historico_data(file_path: str):
         st.error(f"Erro ao carregar Histórico: {e}")
         return pd.DataFrame()
 
+# MUDANÇA: Adicionado 'mod_time' para quebrar o cache em novo upload
 @st.cache_data
-def load_wms_data(file_path: str):
-    """Carrega dados do WMS e filtra pelo último dia de upload."""
+def load_wms_data(file_path: str, mod_time: float):
+    """MUDANÇA: Carrega dados do WMS e filtra pelo último dia de upload."""
     try:
         df = pd.read_excel(file_path, sheet_name='WMS', usecols=COLS_WMS_MAP.keys())
         df.rename(columns=COLS_WMS_MAP, inplace=True)
@@ -198,10 +201,23 @@ def show_pedidos_page(engine, base_data_path):
     hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
     wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
     
+    # MUDANÇA: Obter a data de modificação dos arquivos
+    try:
+        mix_mod_time = os.path.getmtime(mix_file_path)
+        hist_mod_time = os.path.getmtime(hist_file_path)
+        wms_mod_time = os.path.getmtime(wms_file_path)
+    except FileNotFoundError:
+        st.error("Arquivos de dados (Mix, WMS ou Histórico) não encontrados. Faça o upload na página 'Atualização de Dependências'.")
+        return
+    except Exception as e:
+        st.error(f"Erro ao verificar arquivos de dados: {e}")
+        return
+    
     # Carrega todos os dados (funções cacheadas)
-    df_mix = load_mix_data(mix_file_path)
-    df_hist = load_historico_data(hist_file_path)
-    df_wms = load_wms_data(wms_file_path) 
+    # MUDANÇA: Passa os 'mod_time' para quebrar o cache
+    df_mix = load_mix_data(mix_file_path, mix_mod_time)
+    df_hist = load_historico_data(hist_file_path, hist_mod_time)
+    df_wms = load_wms_data(wms_file_path, wms_mod_time) 
     df_ofertas = load_active_offers(engine) # MUDANÇA: Carrega ofertas ativas
 
     if df_mix.empty:
@@ -308,11 +324,17 @@ def show_pedidos_page(engine, base_data_path):
         # Preparar dados históricos para o item
         if not df_hist.empty:
             latest_hist_date = df_hist['Data'].max()
-            df_hist_item = df_hist[
+            df_hist_item_raw = df_hist[ # MUDANÇA: Renomeado para 'raw'
                 (df_hist['Codigo'] == cod) & 
                 (df_hist['Data'] == latest_hist_date)
             ]
-            hist_item_map = df_hist_item.set_index('Loja').to_dict('index')
+            
+            # MUDANÇA: Remove duplicatas por 'Loja', mantendo a primeira ocorrência
+            # Isso garante que o índice 'Loja' será único
+            df_hist_item = df_hist_item_raw.drop_duplicates(subset=['Loja'], keep='first')
+            
+            # Agora .set_index('Loja') é seguro
+            hist_item_map = df_hist_item.set_index('Loja').to_dict('index') 
             data_atualizacao = latest_hist_date.strftime('%d/%m/%Y')
         else:
             hist_item_map = {}
