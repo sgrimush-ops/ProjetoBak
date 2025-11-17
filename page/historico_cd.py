@@ -8,14 +8,13 @@ import numpy as np
 
 # --- Configurações Iniciais ---
 
-# MUDANÇA: Adicionada a coluna 'Situacao' (assumindo o nome)
 COL_HIST_CODIGO = 'CODIGOINT'
 COL_HIST_EMBALAGEM = 'EmbSeparacao'
 COL_HIST_ESTOQUE_LOJA = 'EstCX'
 COL_HIST_PEDIDOS = 'PedCX'
 COL_HIST_DATA = 'DtSolicitacao'
 COL_HIST_DESCRICAO = 'Produto'
-COL_HIST_SITUACAO = 'Situacao' # MUDANÇA: Assumindo que este é o nome da coluna
+COL_HIST_SITUACAO = 'Situacao' 
 
 COL_WMS_CODIGO = 'codigo'
 COL_WMS_QTD = 'Qtd'
@@ -61,7 +60,6 @@ def load_wms_data(file_path: str) -> Optional[pd.DataFrame]:
 def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
     """Carrega dados do Histórico de Solicitações (Lojas)."""
     try:
-        # MUDANÇA: Adiciona COL_HIST_SITUACAO às colunas de leitura
         df = pd.read_excel(
             file_path,
             sheet_name=0, 
@@ -79,7 +77,7 @@ def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
             COL_HIST_ESTOQUE_LOJA: 'Estoque_Lojas',
             COL_HIST_PEDIDOS: 'Pedidos',
             COL_HIST_DATA: 'Data',
-            COL_HIST_SITUACAO: 'Situacao' # MUDANÇA
+            COL_HIST_SITUACAO: 'Situacao'
         }, inplace=True)
         
         df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
@@ -91,7 +89,6 @@ def load_hist_data(file_path: str) -> Optional[pd.DataFrame]:
         df['Pedidos'] = pd.to_numeric(df['Pedidos'], errors='coerce').fillna(0)
         df['Embalagem'] = pd.to_numeric(df['Embalagem'], errors='coerce')
         
-        # MUDANÇA: Garante que a coluna Situacao seja string para comparação
         df['Situacao'] = df['Situacao'].astype(str).str.strip()
         
         return df
@@ -271,7 +268,6 @@ def show_historico_page(engine, base_data_path):
     if not df_final_grafico.empty:
         
         # MUDANÇA: FORMATAR EIXO X (converte data para string)
-        # Converte a coluna 'Dia' (que são objetos date) para strings formatadas
         df_final_grafico['Dia_str'] = pd.to_datetime(df_final_grafico['Dia']).dt.strftime('%d/%m')
         
         colunas_y = []
@@ -318,7 +314,3 @@ def show_historico_page(engine, base_data_path):
             st.dataframe(df_final_grafico)
     else:
         st.warning("Nenhum dado encontrado para exibir no gráfico.")
-    else:
-        st.warning("Nenhum dado encontrado para exibir no gráfico.")
-
-
