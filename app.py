@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 # --- Importa as páginas ---
 from page.home import show_home_page
 from page.consulta_estoq_cd import show_consulta_page
+# from page.historico_cd import show_historico_page  # REMOVIDO
 from page.pedidos import show_pedidos_page
 from page.aprovacao_pedidos import show_aprovacao_page
 from page.status_usuarios import show_status_page
@@ -111,7 +112,7 @@ def create_db_tables():
                     ultimo_update TIMESTAMP,
                     status TEXT DEFAULT 'Aguardando Retorno' 
                 )
-            """)) # MUDANÇA: Status 'Aberto' -> 'Aguardando Retorno'
+            """)) 
             
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS contato_mensagens (
@@ -138,8 +139,6 @@ def create_db_tables():
             
             # --- Lógica de Auto-Deleção (Limpeza de 7 dias Contato) ---
             seven_days_ago = (datetime.now() - pd.Timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Não precisamos mais de 'DELETE FROM contato_mensagens' por causa do ON DELETE CASCADE
             
             conn.execute(text("""
                 DELETE FROM contato_chamados 
@@ -299,7 +298,7 @@ def main():
     paginas_disponiveis_labels = {
         "Home": show_home_page,
         "Consulta de Estoque CD": show_consulta_page,
-        "Histórico de Transferencia CD": show_historico_page,
+        # "Histórico de Transferencia CD": show_historico_page, # REMOVIDO
         "Ofertas Atuais": show_ver_ofertas_page,
         "Alterar Senha": show_mudar_senha_page,
         contato_menu_label: show_contato_page, 
@@ -351,4 +350,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
