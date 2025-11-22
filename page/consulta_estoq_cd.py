@@ -15,32 +15,24 @@ def get_today():
     """Retorna a data atual e força o cache a expirar a cada 24h."""
     return datetime.now().date()
 
-def load_data_optimized(parquet_path, excel_path):
-    """Tenta ler Parquet (rápido), cai para Excel (lento) se necessário."""
-    if os.path.exists(parquet_path):
-        # Leitura ultra-rápida
-        return pd.read_parquet(parquet_path)
-    else:
-        # Fallback para Excel
-        # Verifica se é o Mix (que não tem aba específica 'WMS') ou o WMS
-        if 'Mix' in excel_path:
-            return pd.read_excel(excel_path, dtype=str)
-        return pd.read_excel(excel_path, sheet_name='WMS')
-
 @st.cache_data
-def load_data(base_path_no_ext: str) -> Optional[pd.DataFrame]:
-    """Carrega dados do arquivo Excel especificado (ou Parquet)."""
+def load_data(base_path_no_ext: str, mod_time: float) -> Optional[pd.DataFrame]:
+    """
+    Carrega dados do arquivo Parquet.
+    'mod_time' é usado para invalidar o cache automaticamente quando o arquivo muda.
+    """
     parquet_path = f"{base_path_no_ext}.parquet"
-    excel_path = f"{base_path_no_ext}.xlsm" 
     
-    # Ajuste para o Mix que é .xlsx
-    if 'Mix' in base_path_no_ext:
-        excel_path = f"{base_path_no_ext}.xlsx"
-
-    try:
-        return load_data_optimized(parquet_path, excel_path)
-    except Exception as e:
-        st.error(f"Erro ao carregar o arquivo: {e}")
+    # Tenta ler apenas o Parquet (Rápido)
+    if os.path.exists(parquet_path):
+        try:
+            return pd.read_parquet(parquet_path)
+        except Exception as e:
+            st.error(f"Erro ao ler arquivo Parquet: {e}")
+            return None
+    else:
+        # Se o arquivo não existir (ex: primeiro uso), retorna None silenciosamente
+        # para ser tratado na interface principal
         return None
 
 def preprocess_wms_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -101,21 +93,31 @@ def show_consulta_page(engine, base_data_path):
     """Cria a interface da página de consulta de produtos com busca por descrição."""
     st.title("Consulta de Itens por Descrição/Código")
 
-    # 1. Carregar WMS (caminho sem extensão)
+    # 1. Definir Caminhos
     wms_base_path = os.path.join(base_data_path, "WMS")
-    df_wms_raw = load_data(wms_base_path)
+    mix_base_path = os.path.join(base_data_path, "__MixAtivoSistema")
+
+    # 2. Obter Data de Modificação (Para Cache Inteligente)
+    try:
+        # Se o arquivo não existir, definimos mod_time como 0.0
+        wms_mod = os.path.getmtime(f"{wms_base_path}.parquet") if os.path.exists(f"{wms_base_path}.parquet") else 0.0
+        mix_mod = os.path.getmtime(f"{mix_base_path}.parquet") if os.path.exists(f"{mix_base_path}.parquet") else 0.0
+    except Exception:
+        wms_mod, mix_mod = 0.0, 0.0
+
+    # 3. Carregar Dados (Passando o mod_time para garantir atualização)
+    df_wms_raw = load_data(wms_base_path, wms_mod)
     
     if df_wms_raw is None:
-        st.error(f"Arquivo 'WMS' não encontrado. Faça o upload na página de Admin.")
+        st.error(f"Arquivo 'WMS.parquet' não encontrado. Faça o upload na página de Administração.")
         return
 
     df_wms = preprocess_wms_data(df_wms_raw)
     if df_wms is None:
         return
 
-    # 2. Carregar Mix (caminho sem extensão)
-    mix_base_path = os.path.join(base_data_path, "__MixAtivoSistema")
-    df_mix_raw = load_data(mix_base_path)
+    # Carrega Mix
+    df_mix_raw = load_data(mix_base_path, mix_mod)
     
     # Prepara o Mix (se existir)
     if df_mix_raw is not None:
@@ -234,7 +236,8 @@ def show_consulta_page(engine, base_data_path):
                 for endereco in enderecos_encontrados:
                     st.write(f"- {endereco}")
             else:
-                st.warning(f"Coluna '{COLUNA_ENDERECO}' não encontrada para exibição.")
+                # st.warning(f"Coluna '{COLUNA_ENDERECO}' não encontrada para exibição.")
+                pass
             
             st.write("---")
             
