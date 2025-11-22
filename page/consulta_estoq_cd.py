@@ -15,24 +15,32 @@ def get_today():
     """Retorna a data atual e força o cache a expirar a cada 24h."""
     return datetime.now().date()
 
-@st.cache_data
-def load_data(base_path_no_ext: str, mod_time: float) -> Optional[pd.DataFrame]:
-    """
-    Carrega dados do arquivo Parquet.
-    'mod_time' é usado para invalidar o cache automaticamente quando o arquivo muda.
-    """
-    parquet_path = f"{base_path_no_ext}.parquet"
-    
-    # Tenta ler apenas o Parquet (Rápido)
+def load_data_optimized(parquet_path, excel_path):
+    """Tenta ler Parquet (rápido), cai para Excel (lento) se necessário."""
     if os.path.exists(parquet_path):
-        try:
-            return pd.read_parquet(parquet_path)
-        except Exception as e:
-            st.error(f"Erro ao ler arquivo Parquet: {e}")
-            return None
+        # Leitura ultra-rápida
+        return pd.read_parquet(parquet_path)
     else:
-        # Se o arquivo não existir (ex: primeiro uso), retorna None silenciosamente
-        # para ser tratado na interface principal
+        # Fallback para Excel
+        # Verifica se é o Mix (que não tem aba específica 'WMS') ou o WMS
+        if 'Mix' in excel_path:
+            return pd.read_excel(excel_path, dtype=str)
+        return pd.read_excel(excel_path, sheet_name='WMS')
+
+@st.cache_data
+def load_data(base_path_no_ext: str) -> Optional[pd.DataFrame]:
+    """Carrega dados do arquivo Excel especificado (ou Parquet)."""
+    parquet_path = f"{base_path_no_ext}.parquet"
+    excel_path = f"{base_path_no_ext}.xlsm" 
+    
+    # Ajuste para o Mix que é .xlsx
+    if 'Mix' in base_path_no_ext:
+        excel_path = f"{base_path_no_ext}.xlsx"
+
+    try:
+        return load_data_optimized(parquet_path, excel_path)
+    except Exception as e:
+        st.error(f"Erro ao carregar o arquivo: {e}")
         return None
 
 def preprocess_wms_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -64,6 +72,10 @@ def preprocess_wms_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 def preprocess_mix_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     """Pré-processa o DataFrame do Mix para pegar a embalagem."""
     df = df.copy()
+    
+    # Normaliza nomes das colunas para facilitar o merge (remove espaços)
+    df.columns = df.columns.str.strip()
+    
     # Mapeamento esperado do Mix
     cols_map = {'CODIGOINT': 'codigo', 'EmbSeparacao': 'embalagem'}
     
@@ -80,7 +92,10 @@ def preprocess_mix_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     df['embalagem'] = pd.to_numeric(
         df['embalagem'].astype(str).str.split(',').str[0].str.split('.').str[0].str.strip(),
         errors='coerce'
-    ).fillna(1).astype(int) # Default 1 para evitar divisão por zero
+    ).fillna(1).astype(int)
+    
+    # CORREÇÃO CRÍTICA: Se a embalagem for 0 ou negativa, força ser 1 para evitar erro
+    df.loc[df['embalagem'] <= 0, 'embalagem'] = 1
     
     # Remove duplicatas (um código pode aparecer em várias lojas, pegamos a primeira embalagem que é igual)
     df = df[['codigo', 'embalagem']].drop_duplicates(subset=['codigo'])
@@ -93,31 +108,21 @@ def show_consulta_page(engine, base_data_path):
     """Cria a interface da página de consulta de produtos com busca por descrição."""
     st.title("Consulta de Itens por Descrição/Código")
 
-    # 1. Definir Caminhos
+    # 1. Carregar WMS (caminho sem extensão)
     wms_base_path = os.path.join(base_data_path, "WMS")
-    mix_base_path = os.path.join(base_data_path, "__MixAtivoSistema")
-
-    # 2. Obter Data de Modificação (Para Cache Inteligente)
-    try:
-        # Se o arquivo não existir, definimos mod_time como 0.0
-        wms_mod = os.path.getmtime(f"{wms_base_path}.parquet") if os.path.exists(f"{wms_base_path}.parquet") else 0.0
-        mix_mod = os.path.getmtime(f"{mix_base_path}.parquet") if os.path.exists(f"{mix_base_path}.parquet") else 0.0
-    except Exception:
-        wms_mod, mix_mod = 0.0, 0.0
-
-    # 3. Carregar Dados (Passando o mod_time para garantir atualização)
-    df_wms_raw = load_data(wms_base_path, wms_mod)
+    df_wms_raw = load_data(wms_base_path)
     
     if df_wms_raw is None:
-        st.error(f"Arquivo 'WMS.parquet' não encontrado. Faça o upload na página de Administração.")
+        st.error(f"Arquivo 'WMS' não encontrado. Faça o upload na página de Admin.")
         return
 
     df_wms = preprocess_wms_data(df_wms_raw)
     if df_wms is None:
         return
 
-    # Carrega Mix
-    df_mix_raw = load_data(mix_base_path, mix_mod)
+    # 2. Carregar Mix (caminho sem extensão)
+    mix_base_path = os.path.join(base_data_path, "__MixAtivoSistema")
+    df_mix_raw = load_data(mix_base_path)
     
     # Prepara o Mix (se existir)
     if df_mix_raw is not None:
@@ -145,7 +150,8 @@ def show_consulta_page(engine, base_data_path):
     # Adiciona a informação de embalagem ao dataframe filtrado
     if not df_mix.empty:
         df_filtrado = pd.merge(df_filtrado, df_mix, on='codigo', how='left')
-        df_filtrado['embalagem'] = df_filtrado['embalagem'].fillna(1) # Se não achar, assume emb 1
+        # Se não achar a embalagem no Mix, assume 1
+        df_filtrado['embalagem'] = df_filtrado['embalagem'].fillna(1).astype(int)
     else:
         df_filtrado['embalagem'] = 1
 
@@ -216,7 +222,12 @@ def show_consulta_page(engine, base_data_path):
             emb_produto = int(resultados_finais['embalagem'].iloc[0])
             
             st.markdown(f"#### {descricao_produto}")
-            st.caption(f"Embalagem: {emb_produto} un/cx")
+            
+            # Mensagem condicional sobre a embalagem
+            if emb_produto == 1:
+                st.caption(f"⚠️ Embalagem não encontrada no Mix ou é unitária. Usando padrão: 1 un/cx")
+            else:
+                st.caption(f"Embalagem: {emb_produto} un/cx")
 
             # Cálculos
             total_unidades = resultados_finais['Qtd'].sum()
