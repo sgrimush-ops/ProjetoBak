@@ -108,8 +108,4 @@ def show_admin_tools(engine, base_data_path):
     
     uploaded_mix = st.file_uploader("Selecione o __MixAtivoSistema.xlsx", type=["xlsx", "xls"], key="mix_uploader")
     process_automatic_upload(uploaded_mix, mix_path, mix_base, "mix")
-                # Salva versão rápida
-                target_base = os.path.join(base_data_path, "__MixAtivoSistema")
-                if save_file_as_parquet(uploaded_mix, target_base):
 
-                    st.success("Mix atualizado e otimizado com sucesso!")
