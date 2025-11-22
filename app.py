@@ -9,7 +9,6 @@ from sqlalchemy import create_engine, text
 # --- Importa as páginas ---
 from page.home import show_home_page
 from page.consulta_estoq_cd import show_consulta_page
-from page.historico_cd import show_historico_page
 from page.pedidos import show_pedidos_page
 from page.aprovacao_pedidos import show_aprovacao_page
 from page.status_usuarios import show_status_page
@@ -352,3 +351,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
