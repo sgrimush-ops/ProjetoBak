@@ -101,11 +101,12 @@ def show_consulta_page(engine, base_data_path):
     """Cria a interface da página de consulta de produtos com busca por descrição."""
     st.title("Consulta de Itens por Descrição/Código")
 
+    # MUDANÇA: Botão para forçar a limpeza do cache
     if st.button("🔄 Atualizar Dados (Limpar Cache)", type="primary"):
         st.cache_data.clear()
         st.rerun()
 
-    # 1. Carregar WMS
+    # 1. Carregar WMS (caminho sem extensão)
     wms_base_path = os.path.join(base_data_path, "WMS")
     df_wms_raw = load_data(wms_base_path)
     
@@ -117,7 +118,7 @@ def show_consulta_page(engine, base_data_path):
     if df_wms is None:
         return
 
-    # 2. Carregar Mix (para embalagem)
+    # 2. Carregar Mix (caminho sem extensão)
     mix_base_path = os.path.join(base_data_path, "__MixAtivoSistema")
     df_mix_raw = load_data(mix_base_path)
     
@@ -172,8 +173,6 @@ def show_consulta_page(engine, base_data_path):
         termo_busca = None 
         
     elif termo_busca:
-        # Se a coluna de descrição não existir no WMS, tenta pegar do Mix se possível, 
-        # mas o WMS original já deve ter a descrição. Assumindo que o WMS tem COLUNA_DESCRICAO.
         if COLUNA_DESCRICAO not in df_filtrado.columns:
              st.error(f"Coluna '{COLUNA_DESCRICAO}' não encontrada no WMS.")
              return
