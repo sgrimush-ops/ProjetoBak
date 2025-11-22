@@ -24,88 +24,107 @@ def save_file_as_parquet(uploaded_file, target_path_no_ext):
         if uploaded_file.name.endswith('.csv'):
              df = pd.read_csv(uploaded_file)
         else:
+             # Tenta ler Excel (xls, xlsx, xlsm)
+             # O pandas detecta automaticamente o formato se as bibliotecas (xlrd, openpyxl) estiverem instaladas
              df = pd.read_excel(uploaded_file)
              
-        # Salva como Parquet
+        # Salva como Parquet (Formato de alta performance)
         parquet_path = f"{target_path_no_ext}.parquet"
         df.to_parquet(parquet_path, index=False)
+        
+        # (Opcional) Salva também o original como backup se desejar, 
+        # mas o sistema agora prioriza ler o .parquet
+        # original_ext = os.path.splitext(uploaded_file.name)[1]
+        # with open(f"{target_path_no_ext}{original_ext}", "wb") as f:
+        #     uploaded_file.seek(0)
+        #     f.write(uploaded_file.getbuffer())
+            
         return True
     except Exception as e:
         st.error(f"Erro ao converter para Parquet: {e}")
+        if "xlrd" in str(e):
+             st.error("Dica: Para arquivos .xls antigos, certifique-se de que 'xlrd' está no requirements.txt")
         return False
 
-def process_automatic_upload(uploaded_file, file_path_ext, base_path_no_ext, file_key):
+def process_automatic_upload(uploaded_file, base_path_no_ext, file_key):
     """
-    Gerencia o upload automático: Salva, Converte e Atualiza a tela.
+    Gerencia o upload automático: Converte para Parquet e Atualiza a tela.
     """
     if uploaded_file:
-        # Cria um ID único para este upload (nome + tamanho) para evitar reprocessamento
+        # Cria um ID único para este upload (nome + tamanho) para evitar reprocessamento contínuo
         file_id = f"{uploaded_file.name}_{uploaded_file.size}"
         
         # Se este arquivo exato ainda não foi processado nesta sessão
         if st.session_state.get(f"processed_{file_key}") != file_id:
             
-            progress_bar = st.progress(0, text="Iniciando upload...")
+            progress_container = st.empty()
+            progress_bar = progress_container.progress(0, text="Iniciando upload...")
             
             try:
-                # 1. Salva o arquivo original (Excel/CSV)
-                progress_bar.progress(30, text="Salvando arquivo original...")
-                with open(file_path_ext, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+                # 1. Leitura e Conversão
+                progress_bar.progress(30, text="Lendo arquivo e convertendo para Parquet...")
                 
-                # 2. Converte e Salva o Parquet
-                progress_bar.progress(60, text="Gerando arquivo otimizado (.parquet)...")
+                # Salva diretamente como Parquet (otimizado)
                 if save_file_as_parquet(uploaded_file, base_path_no_ext):
+                    
+                    progress_bar.progress(100, text="Concluído!")
                     
                     # Marca como processado para não entrar em loop
                     st.session_state[f"processed_{file_key}"] = file_id
                     
-                    progress_bar.progress(100, text="Concluído!")
-                    st.success("Arquivo atualizado e otimizado com sucesso!")
+                    st.toast(f"Arquivo {file_key.upper()} atualizado e otimizado com sucesso!", icon="✅")
                     
-                    # Força recarregamento para atualizar a data na tela
+                    # Força recarregamento para atualizar a data na tela imediatamente
                     st.rerun() 
+                    
             except Exception as e:
                 st.error(f"Erro no processamento: {e}")
             finally:
-                progress_bar.empty()
+                progress_container.empty()
 
 def show_admin_tools(engine, base_data_path):
     st.title("🔧 Ferramentas de Admin: Upload de Arquivos")
-    st.info("Basta arrastar os arquivos. A conversão para .parquet e atualização de data são automáticas.")
+    st.info("Basta arrastar os arquivos. O sistema converterá automaticamente para o formato acelerado (.parquet).")
 
     # --- 1. WMS ---
     st.subheader("1. WMS (Estoque CD)")
-    wms_path = os.path.join(base_data_path, "WMS.xlsm")
-    wms_base = os.path.join(base_data_path, "WMS")
+    wms_base = os.path.join(base_data_path, "WMS") # Caminho base sem extensão
+    wms_parquet = wms_base + ".parquet"
     
-    # Mostra a data atual do arquivo no disco
-    st.caption(f"📅 Última atualização: **{get_file_info(wms_path)}**")
+    if os.path.exists(wms_parquet):
+        st.caption(f"📅 Última atualização: **{get_file_info(wms_parquet)}** (Formato Otimizado)")
+    else:
+        st.caption("⚠️ Arquivo otimizado não encontrado.")
     
-    uploaded_wms = st.file_uploader("Selecione o WMS.xlsm", type=["xlsm", "xlsx"], key="wms_uploader")
-    process_automatic_upload(uploaded_wms, wms_path, wms_base, "wms")
+    uploaded_wms = st.file_uploader("Selecione o WMS (xls, xlsx, xlsm)", type=["xlsm", "xlsx", "xls"], key="wms_uploader")
+    process_automatic_upload(uploaded_wms, wms_base, "wms")
 
     st.markdown("---")
 
     # --- 2. Histórico ---
     st.subheader("2. Histórico de Solicitações")
-    hist_path = os.path.join(base_data_path, "historico_solic.xlsm")
     hist_base = os.path.join(base_data_path, "historico_solic")
+    hist_parquet = hist_base + ".parquet"
     
-    st.caption(f"📅 Última atualização: **{get_file_info(hist_path)}**")
+    if os.path.exists(hist_parquet):
+        st.caption(f"📅 Última atualização: **{get_file_info(hist_parquet)}** (Formato Otimizado)")
+    else:
+        st.caption("⚠️ Arquivo otimizado não encontrado.")
     
-    uploaded_hist = st.file_uploader("Selecione o historico_solic.xlsm", type=["xlsm", "xlsx"], key="hist_uploader")
-    process_automatic_upload(uploaded_hist, hist_path, hist_base, "hist")
+    uploaded_hist = st.file_uploader("Selecione o Histórico (xls, xlsx, xlsm)", type=["xlsm", "xlsx", "xls"], key="hist_uploader")
+    process_automatic_upload(uploaded_hist, hist_base, "hist")
 
     st.markdown("---")
 
     # --- 3. Mix ---
     st.subheader("3. Mix Ativo")
-    mix_path = os.path.join(base_data_path, "__MixAtivoSistema.xlsx")
     mix_base = os.path.join(base_data_path, "__MixAtivoSistema")
+    mix_parquet = mix_base + ".parquet"
     
-    st.caption(f"📅 Última atualização: **{get_file_info(mix_path)}**")
+    if os.path.exists(mix_parquet):
+        st.caption(f"📅 Última atualização: **{get_file_info(mix_parquet)}** (Formato Otimizado)")
+    else:
+        st.caption("⚠️ Arquivo otimizado não encontrado.")
     
-    uploaded_mix = st.file_uploader("Selecione o __MixAtivoSistema.xlsx", type=["xlsx", "xls"], key="mix_uploader")
-    process_automatic_upload(uploaded_mix, mix_path, mix_base, "mix")
-
+    uploaded_mix = st.file_uploader("Selecione o Mix (xls, xlsx)", type=["xlsx", "xls"], key="mix_uploader")
+    process_automatic_upload(uploaded_mix, mix_base, "mix")
