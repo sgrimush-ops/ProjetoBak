@@ -7,7 +7,6 @@ import re
 import numpy as np 
 
 # --- Configurações Iniciais ---
-# (Nomes das colunas permanecem os mesmos)
 COL_HIST_CODIGO = 'CODIGOINT'
 COL_HIST_EMBALAGEM = 'EmbSeparacao'
 COL_HIST_ESTOQUE_LOJA = 'EstCX'
@@ -15,9 +14,11 @@ COL_HIST_PEDIDOS = 'PedCX'
 COL_HIST_DATA = 'DtSolicitacao'
 COL_HIST_DESCRICAO = 'Produto'
 COL_HIST_SITUACAO = 'Situacao' 
+
 COL_WMS_CODIGO = 'codigo'
 COL_WMS_QTD = 'Qtd'
 COL_WMS_DATA = 'datasalva'
+
 MESES_DISPONIVEIS = {
     "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4, "Maio": 5, "Junho": 6,
     "Julho": 7, "Agosto": 8, "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
@@ -27,12 +28,10 @@ MESES_INVERSO = {v: k for k, v in MESES_DISPONIVEIS.items()}
 
 # --- Funções de Carregamento de Dados (Cacheadas) ---
 
-# MUDANÇA: Adicionado 'mod_time' à assinatura da função.
-# O Streamlit usará isso como parte da "chave" do cache.
 @st.cache_data
 def load_wms_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
     """Carrega DADOS COMPLETOS do WMS (estoque do CD)."""
-    # 'mod_time' não é usado aqui dentro, mas sua presença quebra o cache.
+    # 'mod_time' é usado para invalidar o cache quando o arquivo muda
     try:
         df = pd.read_excel(
             file_path,
@@ -57,11 +56,10 @@ def load_wms_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
         st.error(f"Erro ao carregar o arquivo WMS ({file_path}): {e}")
         return None
 
-# MUDANÇA: Adicionado 'mod_time' à assinatura da função.
 @st.cache_data
 def load_hist_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
     """Carrega dados do Histórico de Solicitações (Lojas)."""
-    # 'mod_time' não é usado aqui dentro, mas sua presença quebra o cache.
+    # 'mod_time' é usado para invalidar o cache quando o arquivo muda
     try:
         df = pd.read_excel(
             file_path,
@@ -92,6 +90,7 @@ def load_hist_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
         df['Pedidos'] = pd.to_numeric(df['Pedidos'], errors='coerce').fillna(0)
         df['Embalagem'] = pd.to_numeric(df['Embalagem'], errors='coerce')
         
+        # Garante que a situação seja string limpa
         df['Situacao'] = df['Situacao'].astype(str).str.strip()
         
         return df
@@ -108,24 +107,22 @@ def show_historico_page(engine, base_data_path):
     hist_file_path = os.path.join(base_data_path, "historico_solic.xlsm")
     wms_file_path = os.path.join(base_data_path, "WMS.xlsm")
 
-    # MUDANÇA: Obter a data de modificação dos arquivos
+    # Verifica data de modificação para forçar atualização do cache
     try:
         hist_mod_time = os.path.getmtime(hist_file_path)
         wms_mod_time = os.path.getmtime(wms_file_path)
     except FileNotFoundError:
-        st.error("Arquivos de dados (WMS ou Histórico) não encontrados. Faça o upload na página 'Atualização de Dependências'.")
+        st.error("Arquivos de dados não encontrados. Faça o upload na página de Administração.")
         return
     except Exception as e:
-        st.error(f"Erro ao verificar arquivos de dados: {e}")
+        st.error(f"Erro ao verificar arquivos: {e}")
         return
 
-    # MUDANÇA: Passar a data de modificação para as funções de load
+    # Carrega os dados passando o tempo de modificação
     df_hist_full = load_hist_data(hist_file_path, hist_mod_time)
     df_wms_full = load_wms_data(wms_file_path, wms_mod_time)
 
-    
     if df_hist_full is None or df_wms_full is None:
-        st.error("Falha ao carregar um ou mais arquivos de dados. Verifique os uploads.")
         return
 
     embalagem_map = df_hist_full[df_hist_full['Embalagem'] > 0][['Codigo', 'Embalagem']]
@@ -179,7 +176,6 @@ def show_historico_page(engine, base_data_path):
     item_selecionado_display = "Digite algo para buscar..."
 
     with tab1:
-        # Garante que 'Descricao' seja string antes de usar .str.contains
         df_hist_mensal['Descricao'] = df_hist_mensal['Descricao'].astype(str)
         df_hist_mensal['Display'] = df_hist_mensal['Descricao'] + " (Código: " + df_hist_mensal['Codigo'].astype(str) + ")"
         descricao_busca = st.text_input("Digite a descrição ou parte dela:")
@@ -217,7 +213,7 @@ def show_historico_page(engine, base_data_path):
     
     # --- PREPARAÇÃO DOS DADOS PARA O GRÁFICO ---
     
-    df_final_grafico = pd.DataFrame() # Inicializa o dataframe
+    df_final_grafico = pd.DataFrame() 
     
     if codigo_para_filtrar:
         st.subheader(f"Análise: {item_selecionado_display}")
@@ -226,9 +222,10 @@ def show_historico_page(engine, base_data_path):
         
         if df_item_hist.empty:
              st.warning("Produto não encontrado nos dados históricos do mês selecionado.")
-             return
-        
-        # MUDANÇA: A condição agora checa se 'Situacao' é '1' OU '7'
+             # Interrompe aqui se não houver dados do item, para evitar erros posteriores
+             return 
+
+        # Lógica corrigida para Status 1 ou 7 usando .isin()
         condicao_nao_atendido = df_item_hist['Situacao'].isin(['1', '7'])
         df_item_hist['Nao_Atendido_Qtde'] = np.where(
             condicao_nao_atendido, df_item_hist['Pedidos'], 0
@@ -264,9 +261,10 @@ def show_historico_page(engine, base_data_path):
         df_final_grafico.fillna(0, inplace=True)
             
     else:
+        # 2. ANÁLISE TOTAL
         st.subheader(f"Análise Total - {mes_selecionado}/{ano_selecionado}")
         
-        # MUDANÇA: A condição agora checa se 'Situacao' é '1' OU '7'
+        # Lógica corrigida para Status 1 ou 7 usando .isin()
         condicao_nao_atendido_total = df_hist_mensal['Situacao'].isin(['1', '7'])
         df_hist_mensal['Nao_Atendido_Qtde'] = np.where(
             condicao_nao_atendido_total, df_hist_mensal['Pedidos'], 0
@@ -283,12 +281,13 @@ def show_historico_page(engine, base_data_path):
     # Exibe o gráfico de linhas
     if not df_final_grafico.empty:
         
-        # MUDANÇA: FORMATAR EIXO X (converte data para string)
+        # Formata o eixo X para mostrar dia/mês
         df_final_grafico['Dia_str'] = pd.to_datetime(df_final_grafico['Dia']).dt.strftime('%d/%m')
         
         colunas_y = []
         cores_hex = []
         
+        # Define cores e colunas
         if 'Estoque_CD_Item' in df_final_grafico.columns:
             colunas_y.append('Estoque_CD_Item')
             cores_hex.append('#0000FF') # Azul
@@ -317,12 +316,12 @@ def show_historico_page(engine, base_data_path):
             colunas_y.append('Total_Nao_Atendido')
             cores_hex.append('#FF0000') # Vermelho
         
-        # MUDANÇA: Usar a coluna string 'Dia_str' como índice
+        # Define o índice para o gráfico usar as strings formatadas
         if 'Dia_str' in df_final_grafico.columns:
             df_final_grafico = df_final_grafico.set_index('Dia_str')
             
         st.line_chart(
-            df_final_grafico[colunas_y], # MUDANÇA: Passa apenas as colunas Y
+            df_final_grafico[colunas_y],
             color=cores_hex
         )
         

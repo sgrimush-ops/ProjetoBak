@@ -5,25 +5,33 @@ from typing import Optional, Tuple
 import os
 
 # --- Configurações e Path ---
-# MUDANÇA: Removido FILE_PATH daqui. Será gerado dinamicamente.
-# IMPORTANTE: Coloque o nome EXATO da sua coluna de Descrição.
 COLUNA_DESCRICAO = 'Produto' 
 COLUNA_ENDERECO = 'Endereço'
 
-
 # --- Funções de Cache e Helpers ---
 
-@st.cache_resource(ttl=timedelta(hours=18))
+@st.cache_resource(ttl=timedelta(hours=24))
 def get_today():
     """Retorna a data atual e força o cache a expirar a cada 24h."""
     return datetime.now().date()
 
+def load_data_optimized(parquet_path, excel_path):
+    """Tenta ler Parquet (rápido), cai para Excel (lento) se necessário."""
+    if os.path.exists(parquet_path):
+        # Leitura ultra-rápida
+        return pd.read_parquet(parquet_path)
+    else:
+        # Fallback para Excel
+        return pd.read_excel(excel_path, sheet_name='WMS')
+
 @st.cache_data
-def load_data(file_path: str, mod_time: float) -> Optional[pd.DataFrame]:
-    """Carrega dados do arquivo Excel especificado."""
+def load_data(base_path_no_ext: str) -> Optional[pd.DataFrame]:
+    """Carrega dados do arquivo Excel especificado (ou Parquet)."""
+    parquet_path = f"{base_path_no_ext}.parquet"
+    excel_path = f"{base_path_no_ext}.xlsm"
+
     try:
-        # Altere 'WMS' para o nome da aba correta se necessário
-        return pd.read_excel(file_path, sheet_name='WMS')
+        return load_data_optimized(parquet_path, excel_path)
     except Exception as e:
         st.error(f"Erro ao carregar o arquivo: {e}")
         return None
@@ -59,28 +67,25 @@ def preprocess_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 # --- Função Principal de Exibição ---
 
-# MUDANÇA: Adicionado 'engine' e 'base_data_path' como argumentos
-# (O 'engine' não será usado aqui, mas é necessário para consistência)
 def show_consulta_page(engine, base_data_path):
     """Cria a interface da página de consulta de produtos com busca por descrição."""
     st.title("Consulta de Itens por Descrição/Código")
 
-    # MUDANÇA: Definir o caminho completo do arquivo dinamicamente
-    file_path = os.path.join(base_data_path, "WMS.xlsm")
+    # Botão para forçar a limpeza do cache (igual ao histórico)
+    if st.button("🔄 Atualizar Dados (Limpar Cache)", type="primary"):
+        st.cache_data.clear()
+        st.rerun()
 
-    # 1. Carregamento e Pré-processamento
-    try:
-        # MUDANÇA: Usando o 'file_path' dinâmico
-        mod_time = os.path.getmtime(file_path)
-    except FileNotFoundError:
-        # MUDANÇA: Mensagem de erro usa a variável
-        st.error(f"Arquivo '{file_path}' não encontrado. Verifique o upload na página de Admin.")
-        return
-        
-    # MUDANÇA: Usando o 'file_path' dinâmico
-    df_raw = load_data(file_path, mod_time)
+    # Definir o caminho base (sem extensão)
+    wms_base_path = os.path.join(base_data_path, "WMS")
+
+    # Carregamento
+    df_raw = load_data(wms_base_path)
+    
     if df_raw is None:
+        st.error(f"Arquivo 'WMS' não encontrado em '{base_data_path}'. Faça o upload na página de Admin.")
         return
+
     df_processed = preprocess_data(df_raw)
     if df_processed is None:
         return
@@ -200,4 +205,3 @@ def show_consulta_page(engine, base_data_path):
     elif not termo_busca and not codigo_direto:
         st.write("### Planilha do Dia (Primeiras Linhas)")
         st.dataframe(df_filtrado.head(10)) # Exibe apenas as 10 primeiras linhas para performance
-
