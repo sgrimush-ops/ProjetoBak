@@ -1,184 +1,138 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
-from datetime import datetime
+from datetime import datetime, date
 
 # =========================================================
-# FUNÇÕES DE BANCO DE DADOS
+# FUNÇÕES DE PROCESSAMENTO
 # =========================================================
 
-@st.cache_data(ttl=300) # Cache de 5 minutos
-def get_ofertas_atuais(_engine):
-    """Busca ofertas onde a data final é hoje ou no futuro."""
-    today = datetime.now().date()
-    query = text("""
-        SELECT 
-            id, 
-            codigo, 
-            produto, 
-            oferta, 
-            data_inicio, 
-            data_final
-        FROM ofertas
-        WHERE data_final >= :today
-        ORDER BY data_inicio ASC
+def processar_upload(engine, df, data_inicio, data_final):
+    """
+    Processa o DataFrame, valida e faz o "upsert" no banco de dados.
+    """
+    
+    # O DataFrame já chega aqui com as colunas certas ['codigo', 'produto', 'oferta']
+    df_processado = df.copy()
+    
+    # 2. Limpeza e Validação dos Dados
+    try:
+        # Codigo: Remove não numéricos, preenche com 0, converte para int
+        df_processado['codigo'] = pd.to_numeric(df_processado['codigo'], errors='coerce').fillna(0).astype(int)
+        # Oferta: Converte para numérico (float), arredonda para 2 casas
+        df_processado['oferta'] = pd.to_numeric(df_processado['oferta'], errors='coerce').fillna(0).round(2)
+        # Produto: Converte para string e limpa espaços
+        df_processado['produto'] = df_processado['produto'].astype(str).str.strip()
+        
+        # Adiciona as datas
+        df_processado['data_inicio'] = data_inicio
+        df_processado['data_final'] = data_final
+        
+        # Remove linhas onde o código é 0 (inválido ou linha vazia)
+        df_processado = df_processado[df_processado['codigo'] != 0]
+        
+    except Exception as e:
+        st.error(f"Erro ao processar os tipos de dados do arquivo: {e}")
+        return False, 0, 0
+        
+    if df_processado.empty:
+        st.warning("Nenhum dado válido encontrado no arquivo após a limpeza.")
+        return False, 0, 0
+
+    # 3. Lógica de UPSERT no Banco de Dados (PostgreSQL)
+    # Se o código+datas já existir, atualiza o preço e nome.
+    upsert_query = text("""
+        INSERT INTO ofertas (codigo, produto, oferta, data_inicio, data_final)
+        VALUES (:codigo, :produto, :oferta, :data_inicio, :data_final)
+        ON CONFLICT (codigo, data_inicio, data_final) 
+        DO UPDATE SET
+            oferta = EXCLUDED.oferta,
+            produto = EXCLUDED.produto
+        WHERE 
+            ofertas.oferta IS DISTINCT FROM EXCLUDED.oferta
+            OR ofertas.produto IS DISTINCT FROM EXCLUDED.produto
     """)
     
-    with _engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"today": today})
-    return df
-
-def update_oferta_no_banco(engine, id_oferta, campo, novo_valor):
-    """Atualiza um único campo de uma oferta."""
+    records = df_processado.to_dict('records')
+    
     try:
         with engine.begin() as conn:
-            # Proteção simples contra SQL Injection (garante que 'campo' seja seguro)
-            campos_permitidos = ['oferta', 'produto', 'codigo', 'data_inicio', 'data_final']
-            if campo not in campos_permitidos:
-                st.error(f"Erro: Tentativa de atualizar campo inválido '{campo}'.")
-                return
+            result = conn.execute(upsert_query, records)
+            total_afetado = result.rowcount 
             
-            # Formata a data corretamente se for o caso
-            if "data" in campo:
-                novo_valor = pd.to_datetime(novo_valor).date()
-            
-            query = text(f"""
-                UPDATE ofertas
-                SET {campo} = :valor
-                WHERE id = :id_oferta
-            """)
-            conn.execute(query, {"valor": novo_valor, "id_oferta": id_oferta})
-        
-        # Limpa o cache após a edição
-        get_ofertas_atuais.clear()
+        return True, total_afetado, len(records)
         
     except Exception as e:
-        st.error(f"Erro ao atualizar a oferta: {e}")
-
-def deletar_oferta_do_banco(engine, id_oferta):
-    """Deleta uma oferta do banco de dados."""
-    try:
-        with engine.begin() as conn:
-            query = text("DELETE FROM ofertas WHERE id = :id_oferta")
-            conn.execute(query, {"id_oferta": id_oferta})
-        
-        # Limpa o cache após a deleção
-        get_ofertas_atuais.clear()
-        
-    except Exception as e:
-        st.error(f"Erro ao deletar a oferta: {e}")
+        st.error(f"Erro ao salvar dados no banco: {e}")
+        return False, 0, 0
 
 # =========================================================
 # INTERFACE DA PÁGINA
 # =========================================================
 
-def show_ver_ofertas_page(engine, base_data_path):
-    st.title("🛒 Ofertas Atuais")
+def show_upload_ofertas_page(engine, base_data_path):
+    st.title("🚀 Upload de Ofertas (Marketing)")
     
-    role = st.session_state.get("role", "user")
-    
-    # Define se o usuário pode editar
-    pode_editar = (role == 'admin') or (role == 'mkt')
+    st.info("Faça o upload do arquivo (.xls ou .xlsx). O sistema lerá as colunas A, B e E automaticamente.")
 
-    df_ofertas = get_ofertas_atuais(engine)
-    
-    if df_ofertas.empty:
-        st.info("Nenhuma oferta ativa encontrada no sistema.")
+    # 1. Seleção de Data
+    st.subheader("1. Defina a Vigência da Oferta")
+    today = datetime.now().date()
+    col1, col2 = st.columns(2)
+    data_inicio = col1.date_input("Data de Início", value=today)
+    data_final = col2.date_input("Data Final", value=today)
+
+    if data_final < data_inicio:
+        st.error("A 'Data Final' não pode ser anterior à 'Data de Início'.")
         st.stop()
-        
-    if pode_editar:
-        st.info("Como Admin/Mkt, você pode editar ou deletar ofertas diretamente na tabela abaixo.")
-        st.markdown("Para **deletar**, marque a caixa 'Deletar' e clique fora da tabela.")
 
-        # --- Visão de Edição (Admin / Mkt) ---
-        
-        # Adiciona a coluna de deleção
-        df_ofertas["Deletar"] = False
-        
-        # Reordena colunas para a edição
-        colunas = [
-            'Deletar', 'id', 'codigo', 'produto', 'oferta', 
-            'data_inicio', 'data_final'
-        ]
-        
-        # Configuração das colunas
-        config = {
-            "id": st.column_config.NumberColumn("ID", disabled=True, format="%d"),
-            "codigo": st.column_config.NumberColumn("Código", format="%d"),
-            "produto": st.column_config.TextColumn("Produto"),
-            "oferta": st.column_config.NumberColumn("Oferta (R$)", format="%.2f"),
-            "data_inicio": st.column_config.DateColumn("Início", format="DD/MM/YYYY"),
-            "data_final": st.column_config.DateColumn("Final", format="DD/MM/YYYY"),
-            "Deletar": st.column_config.CheckboxColumn("Deletar?")
-        }
+    # 2. Upload do Arquivo
+    st.subheader("2. Selecione o Arquivo")
+    st.markdown("""
+    O sistema lerá as seguintes colunas pela **posição**:
+    - **Coluna A (1ª)** -> Código
+    - **Coluna B (2ª)** -> Produto
+    - **Coluna E (5ª)** -> Preço de Oferta
+    """)
+    
+    uploaded_file = st.file_uploader("Escolha um arquivo Excel", type=["xls", "xlsx"])
 
-        # Salva o estado atual para comparar mudanças
-        if 'df_ofertas_original' not in st.session_state:
-            st.session_state.df_ofertas_original = df_ofertas.copy()
-
-        df_editado = st.data_editor(
-            df_ofertas,
-            column_order=colunas,
-            column_config=config,
-            hide_index=True,
-            use_container_width=True,
-            key="editor_ofertas"
-        )
-        
-        # --- Lógica para Salvar Mudanças ---
-        if df_editado is not None:
-            # 1. Processar Deleções
-            # (Precisamos processar deleções primeiro)
-            ids_para_deletar = df_editado[df_editado["Deletar"] == True]["id"]
-            if not ids_para_deletar.empty:
-                for id_oferta in ids_para_deletar:
-                    deletar_oferta_do_banco(engine, id_oferta)
-                st.session_state.df_ofertas_original = None # Força recarregar
-                st.success(f"{len(ids_para_deletar)} oferta(s) deletada(s).")
-                st.rerun()
-
-            # 2. Processar Edições
-            # Compara o DataFrame editado com o original
-            try:
-                # 'ne' faz a comparação elemento a elemento
-                mudancas = (df_editado != st.session_state.df_ofertas_original).any(axis=1)
-                linhas_mudadas = df_editado[mudancas]
+    if uploaded_file:
+        try:
+            # MUDANÇA: Lê sem cabeçalho (header=None) para pegar a linha 1 como dados
+            # Lê apenas colunas A(0), B(1) e E(4)
+            df = pd.read_excel(uploaded_file, header=None, usecols=[0, 1, 4])
+            
+            # MUDANÇA: Verifica se a primeira linha é cabeçalho (texto) ou dado (número)
+            if not df.empty:
+                primeira_celula = df.iloc[0, 0] # Coluna A, Linha 0
                 
-                if not linhas_mudadas.empty:
-                    for index, linha in linhas_mudadas.iterrows():
-                        id_mudado = linha['id']
-                        # Compara cada coluna da linha mudada com a original
-                        original_linha = st.session_state.df_ofertas_original.loc[index]
-                        
-                        for col_nome in df_editado.columns:
-                            if col_nome == 'Deletar' or col_nome == 'id':
-                                continue # Ignora colunas de controle
-                                
-                            if linha[col_nome] != original_linha[col_nome]:
-                                # Achamos a célula que mudou!
-                                update_oferta_no_banco(engine, id_mudado, col_nome, linha[col_nome])
-                                st.success(f"Oferta ID {id_mudado} atualizada (Campo: {col_nome}).")
-                    
-                    st.session_state.df_ofertas_original = None # Força recarregar
-                    st.rerun()
+                # Tenta converter para número. Se falhar, é texto (cabeçalho) -> Remove a linha
+                try:
+                    float(primeira_celula)
+                    # É número, então não tem cabeçalho, mantém tudo.
+                except (ValueError, TypeError):
+                    # É texto (ex: "Produto"), então é cabeçalho -> Remove a linha 0
+                    df = df.iloc[1:].reset_index(drop=True)
 
-            except Exception as e:
-                # Isso pode falhar se as colunas mudarem (ex: após deleção)
-                pass # Ignora erros de comparação de dataframe
+            # Renomeia as colunas para o padrão interno
+            df.columns = ['codigo', 'produto', 'oferta']
+                
+        except Exception as e:
+            st.error(f"Erro ao ler o arquivo: {e}")
+            if "xlrd" in str(e):
+                st.error("Erro de dependência: O arquivo é .xls antigo. Certifique-se que 'xlrd' está instalado no servidor.")
+            st.stop()
 
-    else:
-        # --- Visão Somente Leitura (Usuário Padrão) ---
-        st.info("Você pode visualizar as ofertas atuais e usar os filtros nas colunas.")
-        st.dataframe(
-            df_ofertas,
-            column_config={
-                "id": None, # Esconde o ID
-                "codigo": "Código",
-                "produto": "Produto",
-                "oferta": st.column_config.NumberColumn("Oferta (R$)", format="%.2f"),
-                "data_inicio": st.column_config.DateColumn("Início", format="DD/MM/YYYY"),
-                "data_final": st.column_config.DateColumn("Final", format="DD/MM/YYYY"),
-            },
-            hide_index=True,
-            use_container_width=True
-        )
+        # Preview dos dados que serão importados
+        with st.expander("Pré-visualização dos dados (Primeiras 5 linhas)"):
+            st.dataframe(df.head())
+
+        if st.button(f"Processar Ofertas", type="primary"):
+            with st.spinner("Processando e salvando..."):
+                success, total_afetado, total_tentado = processar_upload(engine, df, data_inicio, data_final)
+                
+            if success:
+                st.success(f"Sucesso! {total_afetado} registros inseridos/atualizados (de {total_tentado} lidos).")
+            else:
+                st.error("Ocorreu um erro durante o processamento.")
