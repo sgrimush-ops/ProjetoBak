@@ -39,6 +39,7 @@ def load_data_optimized(parquet_path, excel_path, usecols_map=None, dtype=None):
         # Leitura ultra-rápida
         df = pd.read_parquet(parquet_path)
         if usecols_map:
+            # Garante que as colunas existam antes de filtrar
             cols_to_keep = [c for c in usecols_map.keys() if c in df.columns]
             df = df[cols_to_keep]
     else:
