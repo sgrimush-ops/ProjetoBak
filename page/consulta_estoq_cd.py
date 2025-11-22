@@ -72,14 +72,20 @@ def preprocess_wms_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 def preprocess_mix_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     """Pré-processa o DataFrame do Mix para pegar a embalagem."""
     df = df.copy()
+    
+    # --- CORREÇÃO: Limpar nomes das colunas (remover espaços) ---
+    df.columns = df.columns.str.strip()
+    
     # Mapeamento esperado do Mix
     cols_map = {'CODIGOINT': 'codigo', 'EmbSeparacao': 'embalagem'}
     
     # Renomeia se encontrar as colunas originais
+    # Usa compreensão de dicionário para ser case-insensitive se necessário, mas aqui focamos no exato ou strip
     df.rename(columns={k:v for k,v in cols_map.items() if k in df.columns}, inplace=True)
     
     if 'codigo' not in df.columns or 'embalagem' not in df.columns:
         # Se não achar, retorna vazio mas não para o app (pode ser que o mix não tenha subido ainda)
+        # st.warning(f"Colunas do Mix não encontradas. Colunas lidas: {df.columns.tolist()}") # Debug se precisar
         return pd.DataFrame(columns=['codigo', 'embalagem'])
         
     df['codigo'] = pd.to_numeric(df['codigo'], errors='coerce').fillna(0).astype(int)
@@ -88,9 +94,10 @@ def preprocess_mix_data(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     df['embalagem'] = pd.to_numeric(
         df['embalagem'].astype(str).str.split(',').str[0].str.split('.').str[0].str.strip(),
         errors='coerce'
-    ).fillna(1).astype(int) # Default 1 para evitar divisão por zero
+    ).fillna(1).astype(int) 
     
-    # CORREÇÃO CRÍTICA: Se a embalagem for 0 ou negativa, força ser 1 para evitar erro
+    # --- CORREÇÃO: Forçar embalagem >= 1 ---
+    # Se a embalagem for 0 ou negativa, força ser 1 para evitar erro de divisão
     df.loc[df['embalagem'] <= 0, 'embalagem'] = 1
     
     # Remove duplicatas (um código pode aparecer em várias lojas, pegamos a primeira embalagem que é igual)
@@ -104,26 +111,9 @@ def show_consulta_page(engine, base_data_path):
     """Cria a interface da página de consulta de produtos com busca por descrição."""
     st.title("Consulta de Itens por Descrição/Código")
 
-    # MUDANÇA: Data de modificação para invalidar cache se arquivo mudar
+    # 1. Carregar WMS (caminho sem extensão)
     wms_base_path = os.path.join(base_data_path, "WMS")
-    try:
-        # Checa mod time do parquet se existir, senão do excel
-        if os.path.exists(wms_base_path + ".parquet"):
-            mod_time = os.path.getmtime(wms_base_path + ".parquet")
-        elif os.path.exists(wms_base_path + ".xlsm"):
-             mod_time = os.path.getmtime(wms_base_path + ".xlsm")
-        else:
-            mod_time = 0
-    except:
-        mod_time = 0
-        
-    # Função interna para carregar com cache sensível a tempo
-    @st.cache_data
-    def get_data_cached(_base_path, _mod_time):
-        raw = load_data(_base_path)
-        return raw
-
-    df_wms_raw = get_data_cached(wms_base_path, mod_time)
+    df_wms_raw = load_data(wms_base_path)
     
     if df_wms_raw is None:
         st.error(f"Arquivo 'WMS' não encontrado. Faça o upload na página de Admin.")
@@ -135,18 +125,7 @@ def show_consulta_page(engine, base_data_path):
 
     # 2. Carregar Mix (caminho sem extensão)
     mix_base_path = os.path.join(base_data_path, "__MixAtivoSistema")
-    
-    try:
-        if os.path.exists(mix_base_path + ".parquet"):
-            mix_mod = os.path.getmtime(mix_base_path + ".parquet")
-        elif os.path.exists(mix_base_path + ".xlsx"):
-             mix_mod = os.path.getmtime(mix_base_path + ".xlsx")
-        else:
-            mix_mod = 0
-    except:
-        mix_mod = 0
-
-    df_mix_raw = get_data_cached(mix_base_path, mix_mod)
+    df_mix_raw = load_data(mix_base_path)
     
     # Prepara o Mix (se existir)
     if df_mix_raw is not None:
@@ -174,7 +153,7 @@ def show_consulta_page(engine, base_data_path):
     # Adiciona a informação de embalagem ao dataframe filtrado
     if not df_mix.empty:
         df_filtrado = pd.merge(df_filtrado, df_mix, on='codigo', how='left')
-        # Se não achar a embalagem no Mix, assume 1
+        # Se não achar a embalagem no Mix (NaN), assume 1
         df_filtrado['embalagem'] = df_filtrado['embalagem'].fillna(1).astype(int)
     else:
         df_filtrado['embalagem'] = 1
@@ -249,7 +228,8 @@ def show_consulta_page(engine, base_data_path):
             
             # Mensagem condicional sobre a embalagem
             if emb_produto == 1:
-                st.caption(f"⚠️ Embalagem não encontrada no Mix ou é unitária. Usando padrão: 1 un/cx")
+                # Se for 1, pode ser que não tenha achado no mix. Avisa o usuário.
+                st.warning(f"⚠️ Embalagem não encontrada no Mix ou é unitária (1 un/cx). Verifique o cadastro.")
             else:
                 st.caption(f"Embalagem: {emb_produto} un/cx")
 
