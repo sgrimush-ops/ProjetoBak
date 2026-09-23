@@ -11,7 +11,7 @@ from utils.cargos import is_user_consumo_cd
 LISTA_LOJAS = [
     "001", "002", "003", "004", "005", "006",
     "007", "008", "011", "012", "013", "014", "016", "017", "018",
-    "F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08",
+    "F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08", "F09",
     "F10", "F11", "M12", "M13", "ADM", "RH"
 ]
 COLUNAS_LOJAS_PEDIDO = [f"loja_{str(loja).lower()}" for loja in LISTA_LOJAS]
