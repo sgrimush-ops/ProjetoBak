@@ -4,11 +4,13 @@ Página Administrativa: Cadastro e Edição de Tipos de Exposição, Estruturas 
 """
 
 from __future__ import annotations
+import os
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 from typing import List, Dict, Any
 from utils.timezone import now_brazil
+from services.campanha_service import salvar_dimensoes_produto
 
 
 def show_campanhas_admin_page(engine, base_data_path: str = "data"):
@@ -293,7 +295,32 @@ def show_campanhas_admin_page(engine, base_data_path: str = "data"):
     # =========================================================================
     with tab_produtos_dim:
         st.subheader("📦 Dimensões Físicas dos Produtos (cm)")
-        st.caption("Consulte e altere as medidas de altura, largura e profundidade em centímetros cadastradas para os SKUs.")
+        st.caption("Consulte e altere as medidas de altura, largura e profundidade em centímetros. Alterações em qualquer produto de uma família são replicadas automaticamente para todos os SKUs da mesma família.")
+
+        # Carrega mapa de descrições e famílias do parquet
+        map_produtos: Dict[int, Dict[str, Any]] = {}
+        parquet_path = "bdados/query.parquet"
+        if os.path.exists(parquet_path):
+            try:
+                df_p = pd.read_parquet(parquet_path)
+                df_p.columns = [str(c).strip() for c in df_p.columns]
+                df_p_uniq = df_p.drop_duplicates(subset=["CODIGO_PRODUTO"])
+                for _, rp in df_p_uniq.iterrows():
+                    cod = int(rp["CODIGO_PRODUTO"])
+                    desc = str(rp.get("DESCRICAO_PRODUTO", "")).strip()
+                    fam_cod = rp.get("CODIGO_FAMILIA")
+                    fam_desc = str(rp.get("DESCRICAO_FAMILIA", "")).strip() if pd.notna(rp.get("DESCRICAO_FAMILIA")) else ""
+                    if pd.notna(fam_cod) and str(fam_cod).isdigit() and int(fam_cod) > 0:
+                        fam_str = f"{int(fam_cod)} - {fam_desc}" if fam_desc else f"Família {int(fam_cod)}"
+                    else:
+                        fam_str = "Sem Família"
+                    map_produtos[cod] = {
+                        "descricao": desc,
+                        "familia": fam_str,
+                        "codigo_familia": int(fam_cod) if pd.notna(fam_cod) and str(fam_cod).isdigit() and int(fam_cod) > 0 else None
+                    }
+            except Exception:
+                pass
 
         with engine.connect() as conn:
             prods_dim_df = pd.read_sql(text("""
@@ -309,9 +336,25 @@ def show_campanhas_admin_page(engine, base_data_path: str = "data"):
                 ORDER BY pd.produto_codigo
             """), conn)
 
+        if not prods_dim_df.empty:
+            prods_dim_df["descricao_produto"] = prods_dim_df["produto_codigo"].apply(
+                lambda c: map_produtos.get(int(c), {}).get("descricao", f"Produto {c}")
+            )
+            prods_dim_df["familia_info"] = prods_dim_df["produto_codigo"].apply(
+                lambda c: map_produtos.get(int(c), {}).get("familia", "Sem Família")
+            )
+            # Reorganizar colunas na ordem ideal de visualização
+            cols_order = [
+                "id", "produto_codigo", "descricao_produto", "familia_info",
+                "altura_cm", "largura_cm", "profundidade_cm", "data_atualizacao", "usuario_atualizacao"
+            ]
+            prods_dim_df = prods_dim_df[[c for c in cols_order if c in prods_dim_df.columns]]
+
         col_config_pdim = {
             "id": st.column_config.NumberColumn("ID", disabled=True),
             "produto_codigo": st.column_config.NumberColumn("Cód Consinco", disabled=True),
+            "descricao_produto": st.column_config.TextColumn("Descrição do Produto", disabled=True, width="medium"),
+            "familia_info": st.column_config.TextColumn("Família", disabled=True, width="medium"),
             "altura_cm": st.column_config.NumberColumn("Altura (cm)", min_value=0.1, step=0.5, format="%.2f", required=True),
             "largura_cm": st.column_config.NumberColumn("Largura (cm)", min_value=0.1, step=0.5, format="%.2f", required=True),
             "profundidade_cm": st.column_config.NumberColumn("Profundidade (cm)", min_value=0.1, step=0.5, format="%.2f", required=True),
@@ -332,60 +375,54 @@ def show_campanhas_admin_page(engine, base_data_path: str = "data"):
 
             if st.button("💾 Salvar Alterações nas Dimensões dos Produtos", type="primary", key="btn_salvar_pdim"):
                 try:
-                    with engine.begin() as conn:
-                        for _, r in edited_pdim.iterrows():
-                            conn.execute(text("""
-                                UPDATE produto_dimensoes
-                                SET altura_cm = :alt,
-                                    largura_cm = :larg,
-                                    profundidade_cm = :prof,
-                                    data_atualizacao = NOW(),
-                                    usuario_atualizacao = :user
-                                WHERE id = :id
-                            """), {
-                                "alt": float(r["altura_cm"]),
-                                "larg": float(r["largura_cm"]),
-                                "prof": float(r["profundidade_cm"]),
-                                "user": usuario_atual,
-                                "id": int(r["id"])
-                            })
-                    st.success("Dimensões dos produtos atualizadas com sucesso!")
+                    for _, r in edited_pdim.iterrows():
+                        salvar_dimensoes_produto(
+                            engine=engine,
+                            produto_codigo=int(r["produto_codigo"]),
+                            altura_cm=float(r["altura_cm"]),
+                            largura_cm=float(r["largura_cm"]),
+                            profundidade_cm=float(r["profundidade_cm"]),
+                            usuario=usuario_atual,
+                            propagar_familia=True
+                        )
+                    st.success("✅ Dimensões dos produtos e famílias sincronizadas com sucesso!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao atualizar dimensões: {e}")
 
         st.markdown("---")
         with st.expander("➕ Cadastrar Dimensões de um Novo Produto"):
+            col_busca, col_info_p = st.columns([1, 2])
+            novo_pcod = col_busca.number_input("Código do Produto (Consinco):", min_value=1, step=1, key="novo_pcod_admin_dim")
+            
+            p_info = map_produtos.get(int(novo_pcod))
+            if p_info:
+                col_info_p.markdown(f"📦 **Descrição:** `{p_info['descricao']}`")
+                col_info_p.caption(f"👨‍👩‍👧‍👦 **Família:** `{p_info['familia']}` *(As medidas serão salvas e propagadas automaticamente para toda a família)*")
+            elif novo_pcod > 1:
+                col_info_p.info("Código não localizado no catálogo local. O registro será criado normalmente.")
+
             with st.form("form_novo_prod_dim"):
-                col_pd1, col_pd2, col_pd3, col_pd4 = st.columns(4)
-                novo_pcod = col_pd1.number_input("Código do Produto (Consinco):", min_value=1, step=1)
-                novo_palt = col_pd2.number_input("Altura (cm):", min_value=0.1, value=10.0, step=0.5)
-                novo_plarg = col_pd3.number_input("Largura (cm):", min_value=0.1, value=10.0, step=0.5)
-                novo_pprof = col_pd4.number_input("Profundidade (cm):", min_value=0.1, value=10.0, step=0.5)
+                col_pd1, col_pd2, col_pd3 = st.columns(3)
+                novo_palt = col_pd1.number_input("Altura (cm):", min_value=0.1, value=10.0, step=0.5)
+                novo_plarg = col_pd2.number_input("Largura (cm):", min_value=0.1, value=10.0, step=0.5)
+                novo_pprof = col_pd3.number_input("Profundidade (cm):", min_value=0.1, value=10.0, step=0.5)
 
                 if st.form_submit_button("Salvar Dimensões"):
-                    try:
-                        with engine.begin() as conn:
-                            conn.execute(text("""
-                                INSERT INTO produto_dimensoes (produto_codigo, altura_cm, largura_cm, profundidade_cm, data_atualizacao, usuario_atualizacao)
-                                VALUES (:pcod, :alt, :larg, :prof, NOW(), :user)
-                                ON CONFLICT (produto_codigo) DO UPDATE
-                                SET altura_cm = EXCLUDED.altura_cm,
-                                    largura_cm = EXCLUDED.largura_cm,
-                                    profundidade_cm = EXCLUDED.profundidade_cm,
-                                    data_atualizacao = NOW(),
-                                    usuario_atualizacao = EXCLUDED.usuario_atualizacao;
-                            """), {
-                                "pcod": int(novo_pcod),
-                                "alt": float(novo_palt),
-                                "larg": float(novo_plarg),
-                                "prof": float(novo_pprof),
-                                "user": usuario_atual
-                            })
-                        st.success(f"Dimensões do produto {novo_pcod} salvas com sucesso!")
+                    suc_salvar, msg_salvar = salvar_dimensoes_produto(
+                        engine=engine,
+                        produto_codigo=int(novo_pcod),
+                        altura_cm=float(novo_palt),
+                        largura_cm=float(novo_plarg),
+                        profundidade_cm=float(novo_pprof),
+                        usuario=usuario_atual,
+                        propagar_familia=True
+                    )
+                    if suc_salvar:
+                        st.success(msg_salvar)
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
+                    else:
+                        st.error(msg_salvar)
 
     # =========================================================================
     # ABA 5: HISTÓRICO DE AUDITORIA

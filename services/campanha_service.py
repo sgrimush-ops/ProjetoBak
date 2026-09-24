@@ -577,6 +577,24 @@ def carregar_dados_produto_consolidado(
                             "is_selecionado_padrao": st_comp.lower() in ["ativo", "a"]
                         })
 
+                    # Se este SKU individual ainda não tem dimensões, herda da família (qualquer outro SKU irmão já cadastrado)
+                    if resultado["dimensoes"] is None and resultado["skus_familia"]:
+                        cods_fam = [int(s["produto_codigo"]) for s in resultado["skus_familia"]]
+                        with engine.connect() as conn:
+                            dim_fam = conn.execute(text("""
+                                SELECT altura_cm, largura_cm, profundidade_cm 
+                                FROM produto_dimensoes 
+                                WHERE produto_codigo = ANY(:cods)
+                                ORDER BY data_atualizacao DESC
+                                LIMIT 1
+                            """), {"cods": cods_fam}).fetchone()
+                            if dim_fam:
+                                resultado["dimensoes"] = {
+                                    "altura_cm": float(dim_fam.altura_cm),
+                                    "largura_cm": float(dim_fam.largura_cm),
+                                    "profundidade_cm": float(dim_fam.profundidade_cm)
+                                }
+
         except Exception as e:
             logger.error(f"Erro ao ler parquet para produto {produto_codigo}: {e}")
 
@@ -868,13 +886,39 @@ def salvar_dimensoes_produto(
     altura_cm: float,
     largura_cm: float,
     profundidade_cm: float,
-    usuario: str
+    usuario: str,
+    propagar_familia: bool = True
 ) -> Tuple[bool, str]:
     """
     Salva ou atualiza as dimensões físicas de um produto na tabela produto_dimensoes.
+    Se o produto fizer parte de uma família e propagar_familia for True, replica automaticamente
+    as dimensões para todos os outros SKUs da mesma família.
     """
     if any(d <= 0 for d in [altura_cm, largura_cm, profundidade_cm]):
         return False, "Todas as dimensões em cm devem ser maiores que zero."
+
+    # Identifica família do produto para propagação
+    produtos_para_salvar = [int(produto_codigo)]
+    desc_familia_info = ""
+
+    if propagar_familia:
+        parquet_path = "bdados/query.parquet"
+        import os
+        if os.path.exists(parquet_path):
+            try:
+                df = pd.read_parquet(parquet_path)
+                df.columns = [str(c).strip() for c in df.columns]
+                row_prod = df[df["CODIGO_PRODUTO"] == int(produto_codigo)]
+                if not row_prod.empty:
+                    cod_fam = row_prod.iloc[0].get("CODIGO_FAMILIA")
+                    if pd.notna(cod_fam) and str(cod_fam).isdigit() and int(cod_fam) > 0:
+                        df_fam = df[df["CODIGO_FAMILIA"] == int(cod_fam)]
+                        skus_irmaos = df_fam["CODIGO_PRODUTO"].dropna().unique().tolist()
+                        produtos_para_salvar = [int(p) for p in skus_irmaos]
+                        desc_fam_nome = str(row_prod.iloc[0].get("DESCRICAO_FAMILIA") or f"Família {cod_fam}").strip()
+                        desc_familia_info = f" (aplicado a todos os {len(produtos_para_salvar)} SKUs da Família {cod_fam} — {desc_fam_nome})"
+            except Exception as e:
+                logger.warning(f"Erro ao buscar família para propagação de dimensões: {e}")
 
     sql = text("""
         INSERT INTO produto_dimensoes (
@@ -892,14 +936,15 @@ def salvar_dimensoes_produto(
 
     try:
         with engine.begin() as conn:
-            conn.execute(sql, {
-                "pcod": int(produto_codigo),
-                "alt": float(altura_cm),
-                "larg": float(largura_cm),
-                "prof": float(profundidade_cm),
-                "user": usuario
-            })
-        return True, f"Dimensões do produto {produto_codigo} salvas com sucesso!"
+            for pcod in produtos_para_salvar:
+                conn.execute(sql, {
+                    "pcod": int(pcod),
+                    "alt": float(altura_cm),
+                    "larg": float(largura_cm),
+                    "prof": float(profundidade_cm),
+                    "user": usuario
+                })
+        return True, f"Dimensões salvas com sucesso para o produto {produto_codigo}{desc_familia_info}!"
     except Exception as e:
         return False, f"Erro ao salvar dimensões: {e}"
 

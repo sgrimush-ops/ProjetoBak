@@ -246,12 +246,21 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     # -------------------------------------------------------------------------
     # SEÇÃO 1: CADASTRO E MEDIDAS FÍSICAS (cm)
     # -------------------------------------------------------------------------
-    st.subheader(f"📐 1. Dimensões Físicas do Produto ({item_atual['produto_codigo']})")
+    st.subheader(f"📐 1. Dimensões Físicas do Produto: `{item_atual['produto_codigo']}` — **{item_atual['descricao_snapshot']}**")
     
     dim_existente = prod_consolidado.get("dimensoes") or {}
+    has_dim_cadastrada = prod_consolidado.get("dimensoes") is not None
     alt_p_padrao = float(dim_existente.get("altura_cm", 10.0) or 10.0)
     larg_p_padrao = float(dim_existente.get("largura_cm", 10.0) or 10.0)
     prof_p_padrao = float(dim_existente.get("profundidade_cm", 10.0) or 10.0)
+
+    if has_dim_cadastrada:
+        if item_atual.get("codigo_familia"):
+            st.success(f"✅ **Dimensões Pré-carregadas do Cadastro:** Medidas sincronizadas a nível da Família `{item_atual.get('codigo_familia')}` — **{item_atual.get('descricao_familia', 'N/D')}**. Não é necessário alterá-las para os outros sabores.")
+        else:
+            st.success(f"✅ **Dimensões Pré-carregadas do Cadastro:** Medidas ({alt_p_padrao} x {larg_p_padrao} x {prof_p_padrao} cm) já salvas para este produto.")
+    elif item_atual.get("codigo_familia"):
+        st.info(f"👨‍👩‍👧‍👦 **Família `{item_atual.get('codigo_familia')}`:** Ao salvar as dimensões deste produto, todos os sabores da família serão atualizados automaticamente.")
 
     with st.container(border=True):
         col_d1, col_d2, col_d3, col_d4 = st.columns([1, 1, 1, 1])
@@ -269,7 +278,8 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
                     altura_cm=alt_p,
                     largura_cm=larg_p,
                     profundidade_cm=prof_p,
-                    usuario=usuario_atual
+                    usuario=usuario_atual,
+                    propagar_familia=True
                 )
                 if suc_dim:
                     st.success(msg_dim)
