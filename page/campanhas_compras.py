@@ -18,6 +18,7 @@ from services.campanha_service import (
     replicar_campanha,
     carregar_dados_produto_consolidado,
     salvar_item_campanha_compras,
+    salvar_familia_campanha_compras,
     remover_item_campanha,
     enviar_campanha_para_supply,
     obter_itens_campanha_com_detalhes,
@@ -459,6 +460,34 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 col_e1.info(f"📦 **Embalagem de Compra:** `{prod_data['embalagem_compra']}` un/cx *(Fixo do Cadastro ERP)*")
                 col_e2.info(f"🚚 **Embalagem de Transferência:** `{prod_data['embalagem_transferencia']}` un/cx *(Fixo do Cadastro ERP)*")
 
+                # Bloco de Família de Produtos (Seleção de Sabores / SKUs irmãos)
+                skus_familia = prod_data.get("skus_familia", [])
+                skus_selecionados_familia = []
+
+                if prod_data.get("codigo_familia") and len(skus_familia) > 1:
+                    st.markdown("---")
+                    with st.container(border=True):
+                        st.markdown(f"#### 👨‍👩‍👧‍👦 Família de Produtos: `{prod_data['codigo_familia']}` — **{prod_data.get('descricao_familia', prod_data['descricao'])}**")
+                        st.info(f"💡 **Rateio Proporcional de Exposição:** Este produto pertence a uma família com **{len(skus_familia)} SKUs/sabores**. Selecione os sabores que irão participar da mesma estrutura (Ilha / Ponta) nas lojas. O Supply dividirá a capacidade física proporcionalmente entre os SKUs selecionados.")
+
+                        col_fams = st.columns(3)
+                        for idx_f, sku_f in enumerate(skus_familia):
+                            c_idx = idx_f % 3
+                            with col_fams[c_idx]:
+                                is_curr = sku_f["produto_codigo"] == prod_data["produto_codigo"]
+                                padrao_chk = is_curr or sku_f.get("is_selecionado_padrao", True)
+                                st_tag = f"({sku_f['status_compra']})" if sku_f.get("status_compra") else ""
+                                
+                                chk = st.checkbox(
+                                    f"`{sku_f['produto_codigo']}` — {sku_f['descricao']} {st_tag}",
+                                    value=padrao_chk,
+                                    key=f"chk_fam_{prod_data['codigo_familia']}_{sku_f['produto_codigo']}"
+                                )
+                                if chk:
+                                    skus_selecionados_familia.append(sku_f)
+
+                        st.success(f"📌 **{len(skus_selecionados_familia)} de {len(skus_familia)} SKUs selecionados** para rateio conjunto da exposição.")
+
                 # Grid de Lojas para Compras com Padrão INATIVA
                 st.markdown("##### 🏪 Definição de Exposição e Participação por Loja")
                 st.info("💡 **Regra de Participação:** Todas as lojas iniciam com **INATIVA** (sem ponto extra e sem oferta). Selecione o tipo de exposição (ex: `ILHA`, `PONTA DE GÔNDOLA`) apenas nas lojas que participarão da campanha.")
@@ -511,25 +540,73 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                                 "venda_projetada": vp_lj
                             })
 
-                if st.button("💾 Salvar Produto e Matriz de Lojas na Campanha", type="primary", key="btn_salvar_prod_matriz"):
-                    suc, msg = salvar_item_campanha_compras(
-                        engine=engine,
-                        campanha_id=camp_id,
-                        produto_codigo=prod_data["produto_codigo"],
-                        descricao=prod_data["descricao"],
-                        embalagem_compra=prod_data["embalagem_compra"],
-                        embalagem_transferencia=prod_data["embalagem_transferencia"],
-                        dados_lojas=lojas_inputs,
-                        usuario=usuario_atual,
-                        fornecedor=prod_data.get("fornecedor"),
-                        departamento=prod_data.get("departamento"),
-                        comprador=prod_data.get("comprador")
-                    )
-                    if suc:
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                # Botões de Salvamento (Família em Lote vs SKU Individual)
+                st.markdown("---")
+                if len(skus_selecionados_familia) > 1:
+                    col_sav1, col_sav2 = st.columns([3, 2])
+                    with col_sav1:
+                        if st.button(f"💾 Salvar Família ({len(skus_selecionados_familia)} SKUs) e Matriz de Lojas", type="primary", key="btn_salvar_familia_lote"):
+                            suc, msg = salvar_familia_campanha_compras(
+                                engine=engine,
+                                campanha_id=camp_id,
+                                produtos_familia=skus_selecionados_familia,
+                                dados_lojas=lojas_inputs,
+                                usuario=usuario_atual,
+                                data_inicio=camp["data_inicio"],
+                                data_fim=camp["data_fim"],
+                                base_data_path=base_data_path
+                            )
+                            if suc:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with col_sav2:
+                        if st.button(f"💾 Salvar Apenas SKU `{prod_data['produto_codigo']}` Isolado", type="secondary", key="btn_salvar_prod_isolado"):
+                            suc, msg = salvar_item_campanha_compras(
+                                engine=engine,
+                                campanha_id=camp_id,
+                                produto_codigo=prod_data["produto_codigo"],
+                                descricao=prod_data["descricao"],
+                                embalagem_compra=prod_data["embalagem_compra"],
+                                embalagem_transferencia=prod_data["embalagem_transferencia"],
+                                dados_lojas=lojas_inputs,
+                                usuario=usuario_atual,
+                                fornecedor=prod_data.get("fornecedor"),
+                                departamento=prod_data.get("departamento"),
+                                comprador=prod_data.get("comprador"),
+                                codigo_familia=prod_data.get("codigo_familia"),
+                                descricao_familia=prod_data.get("descricao_familia"),
+                                total_skus_familia=1
+                            )
+                            if suc:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                else:
+                    if st.button("💾 Salvar Produto e Matriz de Lojas na Campanha", type="primary", key="btn_salvar_prod_matriz"):
+                        suc, msg = salvar_item_campanha_compras(
+                            engine=engine,
+                            campanha_id=camp_id,
+                            produto_codigo=prod_data["produto_codigo"],
+                            descricao=prod_data["descricao"],
+                            embalagem_compra=prod_data["embalagem_compra"],
+                            embalagem_transferencia=prod_data["embalagem_transferencia"],
+                            dados_lojas=lojas_inputs,
+                            usuario=usuario_atual,
+                            fornecedor=prod_data.get("fornecedor"),
+                            departamento=prod_data.get("departamento"),
+                            comprador=prod_data.get("comprador"),
+                            codigo_familia=prod_data.get("codigo_familia"),
+                            descricao_familia=prod_data.get("descricao_familia"),
+                            total_skus_familia=1
+                        )
+                        if suc:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
 
         # Exibição dos Itens Já Cadastrados com Ordenação por Fornecedor
         if not itens_campanha:
@@ -564,11 +641,19 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 qtd_inativas = len(it.get("lojas", [])) - qtd_ativas
                 status_lojas_tag = f"🟢 {qtd_ativas} lojas ativas" if qtd_ativas > 0 else "⚪ 0 lojas ativas (INATIVO)"
                 
-                exp_label = f"📦 [{it.get('fornecedor') or 'GERAL'}] `{it['produto_codigo']}` — {it['descricao_snapshot']} | {status_lojas_tag}"
+                fam_tag = ""
+                if it.get("codigo_familia"):
+                    tot_fam = int(it.get("total_skus_familia") or 1)
+                    fam_tag = f" | 👨‍👩‍👧‍👦 Família {it.get('codigo_familia')} ({tot_fam} SKUs)"
+                
+                exp_label = f"📦 [{it.get('fornecedor') or 'GERAL'}] `{it['produto_codigo']}` — {it['descricao_snapshot']}{fam_tag} | {status_lojas_tag}"
                 
                 with st.expander(exp_label):
                     c_act1, c_act2 = st.columns([4, 1])
                     c_act1.write(f"🏢 **Fornecedor:** {it.get('fornecedor') or 'GERAL'} | 🏷️ **Depto:** {it.get('departamento') or 'N/D'} | 📦 **Emb Compra:** {it['embalagem_compra']} un | 🚚 **Emb Transf:** {it['embalagem_transferencia']} un")
+                    if it.get("codigo_familia"):
+                        c_act1.caption(f"👨‍👩‍👧‍👦 **Família de Exposição:** `{it['codigo_familia']}` — {it.get('descricao_familia', 'N/D')} (Rateio em {it.get('total_skus_familia', 1)} SKUs)")
+                    
                     if c_act2.button("🗑️ Remover do Mix", key=f"del_prod_{it['produto_codigo']}", type="secondary"):
                         suc, msg = remover_item_campanha(engine, camp_id, it["produto_codigo"], usuario_atual)
                         if suc:

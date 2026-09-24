@@ -273,6 +273,10 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     # -------------------------------------------------------------------------
     st.subheader("🗄️ 2. Parametrização e Simulação de Cubagem por Bandeja")
     
+    tot_skus_fam_item = int(item_atual.get("total_skus_familia") or 1)
+    if item_atual.get("codigo_familia") or tot_skus_fam_item > 1:
+        st.info(f"👨‍👩‍👧‍👦 **Família de Exposição: `{item_atual.get('codigo_familia')}` — {item_atual.get('descricao_familia', 'N/D')}** | Este produto está parametrizado para compartilhar a estrutura física entre **{tot_skus_fam_item} SKUs**. A cubagem abaixo divide o espaço total proporcionalmente.")
+
     estruturas = obter_estruturas_e_bandejas(engine)
     if not estruturas:
         st.warning("Nenhuma estrutura física com bandejas cadastrada. Cadastre em Administração de Exposição.")
@@ -288,10 +292,10 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
         skus_compartilhados = col_c2.number_input(
             "Nº de SKUs Compartilhados:",
             min_value=1,
-            max_value=10,
-            value=1,
+            max_value=max(20, tot_skus_fam_item),
+            value=tot_skus_fam_item,
             step=1,
-            help="Ex: 3 sabores do mesmo produto dividindo a mesma ponta de gôndola."
+            help="Total de SKUs/sabores que dividem o mesmo móvel físico (ex: 5 sabores de Tang na mesma Ilha)."
         )
 
         dim_prod_dict = {"altura_cm": alt_p, "largura_cm": larg_p, "profundidade_cm": prof_p}
@@ -306,7 +310,7 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             col_res1, col_res2, col_res3 = st.columns(3)
             col_res1.metric("Estrutura Física", est_obj["estrutura_nome"])
             col_res2.metric("Total de Bandejas", f"{len(est_obj['bandejas'])} níveis")
-            col_res3.metric("Capacidade Física para este SKU", f"{capacidade_calculada_sku} unidades", delta="Calculado")
+            col_res3.metric(f"Capacidade para este SKU (1 de {skus_compartilhados})", f"{capacidade_calculada_sku} unidades", delta=f"Rateio {1/skus_compartilhados*100:.0f}%" if skus_compartilhados > 1 else "Exclusivo")
 
     # -------------------------------------------------------------------------
     # SEÇÃO 3: ANÁLISE LOJA A LOJA E FECHAMENTO DE VOLUME (SOMENTE LOJAS ATIVAS)

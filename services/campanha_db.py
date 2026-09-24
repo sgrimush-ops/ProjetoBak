@@ -220,6 +220,10 @@ def create_campanhas_tables(engine):
                 ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS fornecedor VARCHAR(150);
                 ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS departamento VARCHAR(100);
                 ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS comprador VARCHAR(100);
+                ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS codigo_familia INTEGER;
+                ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS descricao_familia VARCHAR(255);
+                ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS total_skus_familia INTEGER DEFAULT 1;
+                CREATE INDEX IF NOT EXISTS idx_campanha_itens_fam ON campanha_itens(codigo_familia);
             """))
 
             # 6. MATRIZ DE DISTRIBUIÇÃO POR LOJA

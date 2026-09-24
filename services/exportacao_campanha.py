@@ -32,6 +32,8 @@ def gerar_excel_transferencia_operacional(engine, campanha_id: str) -> bytes:
         SELECT 
             ci.produto_codigo AS "Código Consinco",
             ci.descricao_snapshot AS "Descrição do Produto",
+            ci.codigo_familia AS "Cód Família",
+            ci.descricao_familia AS "Família",
             COALESCE(ci.fornecedor, ci.comprador, 'GERAL') AS "Fornecedor",
             cl.loja_codigo AS "Loja Destino",
             cl.caixas_transferencia AS "Quantidade em Caixas",
@@ -46,7 +48,7 @@ def gerar_excel_transferencia_operacional(engine, campanha_id: str) -> bytes:
         WHERE ci.campanha_id = :cid 
           AND UPPER(COALESCE(te.nome, '')) != 'INATIVA'
           AND COALESCE(cl.caixas_transferencia, 0) > 0
-        ORDER BY ci.produto_codigo, cl.loja_codigo
+        ORDER BY COALESCE(ci.fornecedor, 'GERAL'), ci.codigo_familia, ci.produto_codigo, cl.loja_codigo
     """)
 
     with engine.connect() as conn:
@@ -72,6 +74,9 @@ def gerar_excel_devolutiva_compras(engine, campanha_id: str) -> bytes:
         SELECT 
             cd.produto_codigo AS "Código Consinco",
             cd.descricao_snapshot AS "Descrição do Produto",
+            ci.codigo_familia AS "Cód Família",
+            ci.descricao_familia AS "Família",
+            COALESCE(ci.fornecedor, ci.comprador, 'GERAL') AS "Fornecedor",
             cd.caixas_necessarias AS "Caixas Totais Necessárias",
             cd.caixas_cd_disponivel AS "Caixas Disponíveis CD15",
             cd.caixas_falta AS "Caixas Faltantes (Comprar)",
@@ -82,7 +87,7 @@ def gerar_excel_devolutiva_compras(engine, campanha_id: str) -> bytes:
         FROM campanha_devolutivas cd
         JOIN campanha_itens ci ON ci.campanha_id = cd.campanha_id AND ci.produto_codigo = cd.produto_codigo
         WHERE cd.campanha_id = :cid
-        ORDER BY cd.produto_codigo
+        ORDER BY COALESCE(ci.fornecedor, 'GERAL'), ci.codigo_familia, cd.produto_codigo
     """)
 
     with engine.connect() as conn:

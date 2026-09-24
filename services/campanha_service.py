@@ -472,6 +472,16 @@ def carregar_dados_produto_consolidado(
                 resultado["departamento"] = depto if depto and depto != "None" else "GERAL"
                 resultado["comprador"] = comp if comp and comp != "None" else ""
 
+                # Captura Família
+                cod_fam = primeiro.get("CODIGO_FAMILIA")
+                desc_fam = primeiro.get("DESCRICAO_FAMILIA")
+                if pd.notna(cod_fam) and str(cod_fam).isdigit() and int(cod_fam) > 0:
+                    resultado["codigo_familia"] = int(cod_fam)
+                    resultado["descricao_familia"] = str(desc_fam).strip() if pd.notna(desc_fam) else resultado["descricao"]
+                else:
+                    resultado["codigo_familia"] = None
+                    resultado["descricao_familia"] = None
+
                 # Captura fornecedor e código do fornecedor
                 cod_forn = primeiro.get("COD_FORNECEDOR")
                 nome_forn = primeiro.get("FORNECEDOR") or primeiro.get("RAZAO_FORN_PRINCIPAL")
@@ -520,6 +530,26 @@ def carregar_dados_produto_consolidado(
 
                 resultado["venda_media_diaria_total"] = calcular_venda_media_diaria(venda_total_30d, 30.0)
                 resultado["venda_projetada_total"] = calcular_venda_projetada(resultado["venda_media_diaria_total"], dias_camp)
+
+                # Busca outros SKUs irmãos da mesma família se houver CODIGO_FAMILIA
+                resultado["skus_familia"] = []
+                if resultado["codigo_familia"]:
+                    df_fam = df[df["CODIGO_FAMILIA"] == resultado["codigo_familia"]]
+                    df_fam_uniq = df_fam.drop_duplicates(subset=["CODIGO_PRODUTO"])
+                    for _, rf in df_fam_uniq.iterrows():
+                        p_cod = int(rf["CODIGO_PRODUTO"])
+                        st_comp = str(rf.get("STATUS_COMPRA", "Ativo")).strip()
+                        ec = int(rf.get("EMBL_COMPRA", 1) or 1)
+                        et = int(rf.get("EMBL_TRANSFERENCIA", 1) or ec)
+                        resultado["skus_familia"].append({
+                            "produto_codigo": p_cod,
+                            "descricao": str(rf.get("DESCRICAO_PRODUTO", "")).strip(),
+                            "status_compra": st_comp,
+                            "embalagem_compra": ec,
+                            "embalagem_transferencia": et,
+                            "is_selecionado_padrao": st_comp.lower() in ["ativo", "a"]
+                        })
+
         except Exception as e:
             logger.error(f"Erro ao ler parquet para produto {produto_codigo}: {e}")
 
@@ -546,7 +576,10 @@ def salvar_item_campanha_compras(
     usuario: str,
     fornecedor: Optional[str] = None,
     departamento: Optional[str] = None,
-    comprador: Optional[str] = None
+    comprador: Optional[str] = None,
+    codigo_familia: Optional[int] = None,
+    descricao_familia: Optional[str] = None,
+    total_skus_familia: int = 1
 ) -> Tuple[bool, str]:
     """
     Adiciona ou atualiza um item na campanha e sua matriz de 14 lojas pelo Comprador.
@@ -557,14 +590,18 @@ def salvar_item_campanha_compras(
             item_row = conn.execute(text("""
                 INSERT INTO campanha_itens (
                     campanha_id, produto_codigo, descricao_snapshot, fornecedor, departamento, comprador,
+                    codigo_familia, descricao_familia, total_skus_familia,
                     embalagem_compra, embalagem_transferencia
                 )
-                VALUES (:cid, :pcod, :desc, :forn, :dep, :comp, :e_c, :e_t)
+                VALUES (:cid, :pcod, :desc, :forn, :dep, :comp, :cod_fam, :desc_fam, :tot_skus, :e_c, :e_t)
                 ON CONFLICT (campanha_id, produto_codigo) DO UPDATE
                 SET descricao_snapshot = EXCLUDED.descricao_snapshot,
                     fornecedor = COALESCE(EXCLUDED.fornecedor, campanha_itens.fornecedor),
                     departamento = COALESCE(EXCLUDED.departamento, campanha_itens.departamento),
                     comprador = COALESCE(EXCLUDED.comprador, campanha_itens.comprador),
+                    codigo_familia = COALESCE(EXCLUDED.codigo_familia, campanha_itens.codigo_familia),
+                    descricao_familia = COALESCE(EXCLUDED.descricao_familia, campanha_itens.descricao_familia),
+                    total_skus_familia = EXCLUDED.total_skus_familia,
                     embalagem_compra = EXCLUDED.embalagem_compra,
                     embalagem_transferencia = EXCLUDED.embalagem_transferencia
                 RETURNING id;
@@ -572,9 +609,12 @@ def salvar_item_campanha_compras(
                 "cid": campanha_id,
                 "pcod": int(produto_codigo),
                 "desc": descricao,
-                "forn": fornecedor or "GERAL",
+                "forn": fornecedor or "FORNECEDOR DIVERSOS",
                 "dep": departamento or "",
                 "comp": comprador or "",
+                "cod_fam": codigo_familia,
+                "desc_fam": descricao_familia,
+                "tot_skus": max(1, total_skus_familia),
                 "e_c": int(embalagem_compra or 1),
                 "e_t": int(embalagem_transferencia or 1)
             }).fetchone()
@@ -644,6 +684,79 @@ def salvar_item_campanha_compras(
     except Exception as e:
         logger.error(f"Erro ao salvar item na campanha: {e}")
         return False, f"Erro ao salvar produto: {e}"
+
+
+def salvar_familia_campanha_compras(
+    engine,
+    campanha_id: str,
+    produtos_familia: List[Dict[str, Any]],
+    dados_lojas: List[Dict[str, Any]],
+    usuario: str,
+    data_inicio: date,
+    data_fim: date,
+    base_data_path: str = "data"
+) -> Tuple[bool, str]:
+    """
+    Salva em lote múltiplos produtos pertencentes à mesma família de exposição.
+    """
+    if not produtos_familia:
+        return False, "Nenhum produto da família selecionado."
+
+    total_skus = len(produtos_familia)
+    sucessos = 0
+    erros = []
+
+    for p in produtos_familia:
+        p_cod = p["produto_codigo"]
+        prod_data = carregar_dados_produto_consolidado(
+            engine=engine,
+            produto_codigo=p_cod,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
+            base_data_path=base_data_path
+        )
+
+        # Monta matriz de lojas para este SKU específico
+        lojas_sku = []
+        for dl in dados_lojas:
+            lj_c = dl["loja_codigo"]
+            lj_det = prod_data["lojas_detalhe"].get(lj_c, {})
+            lojas_sku.append({
+                "loja_codigo": lj_c,
+                "tipo_exposicao_id": dl.get("tipo_exposicao_id"),
+                "estrutura_exposicao_id": dl.get("estrutura_exposicao_id"),
+                "volume_comprador": dl.get("volume_comprador", 0),
+                "estoque_loja": lj_det.get("estoque_loja", 0.0),
+                "estoque_cd": prod_data["estoque_cd15"],
+                "venda_media": lj_det.get("venda_media", 0.0),
+                "venda_projetada": lj_det.get("venda_projetada", 0.0)
+            })
+
+        suc, msg = salvar_item_campanha_compras(
+            engine=engine,
+            campanha_id=campanha_id,
+            produto_codigo=p_cod,
+            descricao=prod_data["descricao"],
+            embalagem_compra=prod_data["embalagem_compra"],
+            embalagem_transferencia=prod_data["embalagem_transferencia"],
+            dados_lojas=lojas_sku,
+            usuario=usuario,
+            fornecedor=prod_data.get("fornecedor"),
+            departamento=prod_data.get("departamento"),
+            comprador=prod_data.get("comprador"),
+            codigo_familia=prod_data.get("codigo_familia"),
+            descricao_familia=prod_data.get("descricao_familia"),
+            total_skus_familia=total_skus
+        )
+        if suc:
+            sucessos += 1
+        else:
+            erros.append(f"{p_cod}: {msg}")
+
+    if sucessos > 0:
+        return True, f"Família cadastrada com sucesso! {sucessos} produtos inseridos na campanha compartilhando a exposição."
+    else:
+        return False, f"Falha ao salvar família: {'; '.join(erros)}"
 
 
 def remover_item_campanha(engine, campanha_id: str, produto_codigo: int, usuario: str) -> Tuple[bool, str]:
@@ -816,14 +929,14 @@ def obter_estruturas_e_bandejas(engine, tipo_exposicao_id: Optional[int] = None)
 
 def sincronizar_metadados_itens_parquet(engine, campanha_id: Optional[str] = None) -> int:
     """
-    Sincroniza departamento, comprador e fornecedor dos itens da campanha a partir do query.parquet.
+    Sincroniza departamento, comprador, fornecedor e família dos itens da campanha a partir do query.parquet.
     """
     parquet_path = "bdados/query.parquet"
     import os
     if not os.path.exists(parquet_path):
         return 0
 
-    where_cid = "WHERE (ci.fornecedor IS NULL OR ci.fornecedor IN ('GERAL', 'N/D', '') OR ci.departamento IS NULL OR ci.departamento IN ('N/D', ''))"
+    where_cid = "WHERE (ci.fornecedor IS NULL OR ci.fornecedor IN ('GERAL', 'N/D', '') OR ci.departamento IS NULL OR ci.departamento IN ('N/D', '') OR ci.codigo_familia IS NULL)"
     params = {}
     if campanha_id:
         where_cid += " AND ci.campanha_id = :cid"
@@ -832,7 +945,7 @@ def sincronizar_metadados_itens_parquet(engine, campanha_id: Optional[str] = Non
     try:
         with engine.connect() as conn:
             itens_pend = conn.execute(text(f"""
-                SELECT id, produto_codigo, fornecedor, departamento, comprador 
+                SELECT id, produto_codigo, fornecedor, departamento, comprador, codigo_familia, descricao_familia 
                 FROM campanha_itens ci
                 {where_cid}
             """), params).fetchall()
@@ -854,6 +967,11 @@ def sincronizar_metadados_itens_parquet(engine, campanha_id: Optional[str] = Non
                     depto = str(row.get("DEPARTAMENTO", "")).strip() or "GERAL"
                     comp = str(row.get("COMPRADOR", "")).strip() or ""
                     
+                    cod_fam = row.get("CODIGO_FAMILIA")
+                    desc_fam = row.get("DESCRICAO_FAMILIA")
+                    cod_fam_val = int(cod_fam) if pd.notna(cod_fam) and str(cod_fam).isdigit() and int(cod_fam) > 0 else None
+                    desc_fam_val = str(desc_fam).strip() if pd.notna(desc_fam) else None
+
                     cod_forn = row.get("COD_FORNECEDOR")
                     nome_forn = row.get("FORNECEDOR") or row.get("RAZAO_FORN_PRINCIPAL")
 
@@ -876,9 +994,18 @@ def sincronizar_metadados_itens_parquet(engine, campanha_id: Optional[str] = Non
                         UPDATE campanha_itens
                         SET fornecedor = :forn,
                             departamento = :dep,
-                            comprador = :comp
+                            comprador = :comp,
+                            codigo_familia = COALESCE(:cod_fam, codigo_familia),
+                            descricao_familia = COALESCE(:desc_fam, descricao_familia)
                         WHERE id = :id
-                    """), {"forn": forn, "dep": depto, "comp": comp, "id": it.id})
+                    """), {
+                        "forn": forn,
+                        "dep": depto,
+                        "comp": comp,
+                        "cod_fam": cod_fam_val,
+                        "desc_fam": desc_fam_val,
+                        "id": it.id
+                    })
                     atualizados += 1
 
         return atualizados
@@ -899,6 +1026,7 @@ def obter_itens_campanha_com_detalhes(engine, campanha_id: str) -> List[Dict[str
             COALESCE(NULLIF(ci.fornecedor, 'GERAL'), NULLIF(ci.comprador, ''), ci.departamento, 'FORNECEDOR DIVERSOS') AS fornecedor,
             COALESCE(ci.departamento, 'GERAL') AS departamento,
             COALESCE(ci.comprador, '') AS comprador,
+            ci.codigo_familia, ci.descricao_familia, COALESCE(ci.total_skus_familia, 1) AS total_skus_familia,
             ci.embalagem_compra, ci.embalagem_transferencia,
             pd.altura_cm, pd.largura_cm, pd.profundidade_cm
         FROM campanha_itens ci
