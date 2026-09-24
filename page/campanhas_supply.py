@@ -38,18 +38,108 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
 
     usuario_atual = st.session_state.get("username", "supply")
 
-    # Campanhas disponíveis para o Supply
-    campanhas = listar_campanhas(
-        engine=engine,
-        status_filtro=["ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "ATIVA"]
-    )
+    # -------------------------------------------------------------------------
+    # PAINEL DE FILTROS SUPERIORES DE CONSULTA (SUPPLY)
+    # -------------------------------------------------------------------------
+    with engine.connect() as conn:
+        lojas_db = conn.execute(text("SELECT codigo, nome FROM lojas WHERE tipo = 'LOJA' AND ativa = TRUE ORDER BY codigo")).fetchall()
+        lojas_list = [dict(r._mapping) for r in lojas_db]
+        lojas_map = {l["codigo"]: l["nome"] for l in lojas_list}
 
-    if not campanhas:
-        st.info("Nenhuma campanha aguardando avaliação ou finalizada no momento.")
+    st.markdown("### 🔍 Filtros de Consulta")
+    with st.container(border=True):
+        col_sf1, col_sf2, col_sf3 = st.columns([2, 2, 2])
+
+        # 1. Filtro de Loja
+        with col_sf1:
+            opcoes_lojas_s = ["TODAS"] + [l["codigo"] for l in lojas_list]
+            sel_loja_supply = st.selectbox(
+                "Filtrar por Loja:",
+                opcoes_lojas_s,
+                format_func=lambda x: "🌟 Todas as Lojas (Consolidado)" if x == "TODAS" else f"{x} - {lojas_map.get(x, 'Loja ' + x)}",
+                key="filtro_loja_supply_page"
+            )
+
+        # 2. Filtro de Período / Datas
+        with col_sf2:
+            hoje_s = datetime.now().date()
+            col_sd1, col_sd2 = st.columns(2)
+            d_ini_s = col_sd1.date_input("Vigência De:", value=hoje_s - pd.Timedelta(days=30), key="d_ini_supply_filtro")
+            d_fim_s = col_sd2.date_input("Até:", value=hoje_s + pd.Timedelta(days=60), key="d_fim_supply_filtro")
+
+        # 3. Filtro de Status
+        with col_sf3:
+            status_opcoes_s = ["ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "ATIVA", "RASCUNHO"]
+            status_default_s = ["ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "ATIVA"]
+            status_selecionados_s = st.multiselect(
+                "Status da Campanha:",
+                status_opcoes_s,
+                default=status_default_s,
+                key="filtro_status_supply"
+            )
+
+    # Consulta no Banco com filtros
+    where_supply = ["c.data_fim >= :d_ini", "c.data_inicio <= :d_fim"]
+    params_supply: Dict[str, Any] = {
+        "d_ini": d_ini_s,
+        "d_fim": d_fim_s
+    }
+
+    if status_selecionados_s:
+        where_supply.append("c.status = ANY(:status_list)")
+        params_supply["status_list"] = status_selecionados_s
+
+    if sel_loja_supply != "TODAS":
+        where_supply.append("cl.loja_codigo = :loja_filtro")
+        params_supply["loja_filtro"] = str(sel_loja_supply).zfill(3)
+
+    where_sql_supply = " AND ".join(where_supply)
+
+    sql_campanhas_supply = text(f"""
+        SELECT DISTINCT
+            c.id as campanha_id,
+            c.codigo_campanha,
+            c.nome as campanha_nome,
+            c.data_inicio,
+            c.data_fim,
+            c.status,
+            c.observacoes,
+            COUNT(DISTINCT ci.produto_codigo) as total_skus,
+            SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.volume_final_supply, 0) ELSE 0 END) as total_unidades,
+            SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.caixas_transferencia, 0) ELSE 0 END) as total_caixas
+        FROM campanhas c
+        JOIN campanha_itens ci ON ci.campanha_id = c.id
+        JOIN campanha_lojas cl ON cl.campanha_item_id = ci.id
+        LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
+        WHERE {where_sql_supply}
+        GROUP BY c.id, c.codigo_campanha, c.nome, c.data_inicio, c.data_fim, c.status, c.observacoes
+        ORDER BY c.data_inicio ASC, c.nome ASC
+    """)
+
+    with engine.connect() as conn:
+        campanhas_encontradas = conn.execute(sql_campanhas_supply, params_supply).fetchall()
+
+    if not campanhas_encontradas:
+        st.info("Nenhuma campanha localizada para os filtros selecionados.")
         return
 
-    camp_dict = {f"{c['codigo_campanha']} — {c['nome']} [{c['status']}]": c["id"] for c in campanhas}
-    sel_camp_label = st.selectbox("Selecione a Campanha para Avaliação:", list(camp_dict.keys()), key="sel_camp_supply")
+    # Métricas Gerais do Supply
+    tot_skus_s = sum(c.total_skus or 0 for c in campanhas_encontradas)
+    tot_un_s = sum(c.total_unidades or 0 for c in campanhas_encontradas)
+    tot_cx_s = sum(c.total_caixas or 0 for c in campanhas_encontradas)
+
+    col_sm1, col_sm2, col_sm3, col_sm4 = st.columns(4)
+    col_sm1.metric("Campanhas Filtradas", len(campanhas_encontradas))
+    col_sm2.metric("Total de Produtos (SKUs)", tot_skus_s)
+    col_sm3.metric("Volume Aprovado (Un)", f"{tot_un_s:,.0f} un")
+    col_sm4.metric("Total de Caixas a Transferir", f"{tot_cx_s:,.0f} cx")
+
+    st.markdown("---")
+
+    # Seletor de Campanha
+    col_cs_sel, col_cs_info = st.columns([3, 1])
+    camp_dict = {f"{c.codigo_campanha} — {c.campanha_nome} [{c.status}]": c.campanha_id for c in campanhas_encontradas}
+    sel_camp_label = col_cs_sel.selectbox("Selecione a Campanha para Avaliação / Cubagem:", list(camp_dict.keys()), key="sel_camp_supply")
     camp_id = camp_dict[sel_camp_label]
 
     camp = obter_campanha_por_id(engine, camp_id)

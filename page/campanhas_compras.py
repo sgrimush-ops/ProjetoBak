@@ -93,35 +93,128 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     st.error(msg)
 
     # =========================================================================
-    # ABA 3: TODAS AS CAMPANHAS
+    # ABA 3: TODAS AS CAMPANHAS (COM FILTROS AVANÇADOS)
     # =========================================================================
     with tab_existentes:
-        st.subheader("Campanhas Cadastradas")
-        col_f1, col_f2 = st.columns([2, 1])
-        status_filtro = col_f1.multiselect(
-            "Filtrar por Status:",
-            ["RASCUNHO", "ATIVA", "ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "INATIVA", "CANCELADA"],
-            default=["RASCUNHO", "ATIVA", "ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS"]
-        )
-        apenas_vigentes = col_f2.checkbox("Apenas Vigentes", value=False)
+        st.subheader("📂 Consulta e Gestão de Campanhas")
+        st.caption("Filtre campanhas por loja, período de vigência e status operacional.")
 
-        campanhas_lista = listar_campanhas(engine, status_filtro=status_filtro, apenas_vigentes=apenas_vigentes)
+        # Painel de Filtros Superiores
+        with st.container(border=True):
+            col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+
+            with col_f1:
+                opcoes_lojas_c = ["TODAS"] + [l["codigo"] for l in lojas_db]
+                sel_loja_compras = st.selectbox(
+                    "Filtrar por Loja:",
+                    opcoes_lojas_c,
+                    format_func=lambda x: "🌟 Todas as Lojas (Consolidado)" if x == "TODAS" else f"{x} - {lojas_map.get(x, 'Loja ' + x)}",
+                    key="filtro_loja_compras_tab"
+                )
+
+            with col_f2:
+                hoje_c = date.today()
+                col_cd1, col_cd2 = st.columns(2)
+                d_ini_c = col_cd1.date_input("Vigência De:", value=hoje_c - timedelta(days=30), key="d_ini_compras_tab")
+                d_fim_c = col_cd2.date_input("Até:", value=hoje_c + timedelta(days=60), key="d_fim_compras_tab")
+
+            with col_f3:
+                status_opcoes_c = ["RASCUNHO", "ATIVA", "ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "INATIVA", "CANCELADA"]
+                status_default_c = ["RASCUNHO", "ATIVA", "ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA"]
+                status_selecionados_c = st.multiselect(
+                    "Status da Campanha:",
+                    status_opcoes_c,
+                    default=status_default_c,
+                    key="filtro_status_compras_tab"
+                )
+
+        # Consulta SQL com filtros avançados
+        where_compras = ["c.data_fim >= :d_ini", "c.data_inicio <= :d_fim"]
+        params_compras: Dict[str, Any] = {
+            "d_ini": d_ini_c,
+            "d_fim": d_fim_c
+        }
+
+        if status_selecionados_c:
+            where_compras.append("c.status = ANY(:status_list)")
+            params_compras["status_list"] = status_selecionados_c
+
+        if sel_loja_compras != "TODAS":
+            where_compras.append("cl.loja_codigo = :loja_filtro")
+            params_compras["loja_filtro"] = str(sel_loja_compras).zfill(3)
+
+        where_sql_compras = " AND ".join(where_compras)
+
+        sql_campanhas_compras = text(f"""
+            SELECT DISTINCT
+                c.id as campanha_id,
+                c.codigo_campanha,
+                c.nome as campanha_nome,
+                c.data_inicio,
+                c.data_fim,
+                c.status,
+                c.usuario_criacao,
+                c.data_criacao,
+                c.observacoes,
+                COUNT(DISTINCT ci.produto_codigo) as total_skus,
+                (SELECT COUNT(*) FROM campanha_devolutivas cd WHERE cd.campanha_id = c.id AND cd.situacao = 'PENDENTE') as total_pendencias,
+                SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.volume_final_supply, 0) ELSE 0 END) as total_unidades,
+                SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.caixas_transferencia, 0) ELSE 0 END) as total_caixas
+            FROM campanhas c
+            LEFT JOIN campanha_itens ci ON ci.campanha_id = c.id
+            LEFT JOIN campanha_lojas cl ON cl.campanha_item_id = ci.id
+            LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
+            WHERE {where_sql_compras}
+            GROUP BY c.id, c.codigo_campanha, c.nome, c.data_inicio, c.data_fim, c.status, c.usuario_criacao, c.data_criacao, c.observacoes
+            ORDER BY c.data_inicio ASC, c.nome ASC
+        """)
+
+        with engine.connect() as conn:
+            campanhas_lista = conn.execute(sql_campanhas_compras, params_compras).fetchall()
 
         if not campanhas_lista:
-            st.info("Nenhuma campanha encontrada para os filtros selecionados.")
+            st.info("Nenhuma campanha localizada para os filtros selecionados.")
         else:
-            for c in campanhas_lista:
-                with st.expander(f"🏷️ {c['codigo_campanha']} — {c['nome']} [{c['status']}]"):
-                    st.write(f"**Vigência:** {c['data_inicio'].strftime('%d/%m/%Y')} até {c['data_fim'].strftime('%d/%m/%Y')} ({calcular_dias_campanha(c['data_inicio'], c['data_fim'])} dias)")
-                    st.write(f"**Total de Produtos:** {c['total_itens']} | **Pendências de Compra:** {c['total_pendencias']}")
-                    st.write(f"**Criado por:** {c['usuario_criacao']} em {c['data_criacao'].strftime('%d/%m/%Y %H:%M')}")
-                    if c["observacoes"]:
-                        st.caption(f"Obs: {c['observacoes']}")
+            # Métricas Gerais da Consulta
+            tot_skus_c = sum(c.total_skus or 0 for c in campanhas_lista)
+            tot_un_c = sum(c.total_unidades or 0 for c in campanhas_lista)
+            tot_cx_c = sum(c.total_caixas or 0 for c in campanhas_lista)
+            tot_pend_c = sum(c.total_pendencias or 0 for c in campanhas_lista)
 
-                    col_act1, col_act2 = st.columns([1, 4])
-                    if col_act1.button("Selecionar / Editar", key=f"sel_camp_{c['id']}", type="primary"):
-                        st.session_state["campanha_selecionada_id"] = c["id"]
-                        st.rerun()
+            cm_1, cm_2, cm_3, cm_4 = st.columns(4)
+            cm_1.metric("Campanhas Filtradas", len(campanhas_lista))
+            cm_2.metric("Total de Produtos (SKUs)", tot_skus_c)
+            cm_3.metric("Volume Aprovado (Un)", f"{tot_un_c:,.0f} un")
+            cm_4.metric("Caixas a Transferir / Pendências", f"{tot_cx_c:,.0f} cx", f"{tot_pend_c} faltas CD" if tot_pend_c > 0 else "0 faltas")
+
+            st.markdown("---")
+
+            for c in campanhas_lista:
+                d_ini_f = c.data_inicio.strftime("%d/%m/%Y")
+                d_fim_f = c.data_fim.strftime("%d/%m/%Y")
+                dias_f = (c.data_fim - c.data_inicio).days + 1
+                status_tag = c.status
+
+                with st.expander(f"🏷️ `{c.codigo_campanha}` — **{c.campanha_nome}** [{status_tag}] | Mix: {c.total_skus} prods | Pendências: {c.total_pendencias}"):
+                    st.write(f"📅 **Vigência:** {d_ini_f} até {d_fim_f} ({dias_f} dias) | **Criado por:** {c.usuario_criacao} em {c.data_criacao.strftime('%d/%m/%Y %H:%M')}")
+                    if c.observacoes:
+                        st.caption(f"📌 Obs: {c.observacoes}")
+
+                    col_cact1, col_cact2, col_cact3 = st.columns([1.5, 1.5, 3])
+                    with col_cact1:
+                        if st.button("🎯 Abrir / Editar no Compras", key=f"sel_camp_{c.campanha_id}", type="primary"):
+                            st.session_state["campanha_selecionada_id"] = c.campanha_id
+                            st.rerun()
+
+                    with col_cact2:
+                        excel_dev_c = gerar_excel_devolutiva_compras(engine, c.campanha_id)
+                        st.download_button(
+                            label="📑 Devolutiva de Faltas",
+                            data=excel_dev_c,
+                            file_name=f"devolutiva_{c.codigo_campanha}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"btn_dev_exp_{c.campanha_id}"
+                        )
 
     # =========================================================================
     # ABA 4: DEVOLUTIVAS DE COMPRAS (COM DOWNLOAD)

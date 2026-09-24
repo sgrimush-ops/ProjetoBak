@@ -467,9 +467,29 @@ def carregar_dados_produto_consolidado(
             if not df_prod.empty:
                 primeiro = df_prod.iloc[0]
                 resultado["descricao"] = str(primeiro.get("DESCRICAO_PRODUTO", "")).strip()
-                resultado["departamento"] = str(primeiro.get("DEPARTAMENTO", "")).strip()
-                resultado["comprador"] = str(primeiro.get("COMPRADOR", "")).strip()
-                resultado["fornecedor"] = str(primeiro.get("FORNECEDOR", "")).strip() or resultado["comprador"] or "GERAL"
+                depto = str(primeiro.get("DEPARTAMENTO", "")).strip()
+                comp = str(primeiro.get("COMPRADOR", "")).strip()
+                resultado["departamento"] = depto if depto and depto != "None" else "GERAL"
+                resultado["comprador"] = comp if comp and comp != "None" else ""
+
+                # Captura fornecedor e código do fornecedor
+                cod_forn = primeiro.get("COD_FORNECEDOR")
+                nome_forn = primeiro.get("FORNECEDOR") or primeiro.get("RAZAO_FORN_PRINCIPAL")
+
+                if pd.notna(nome_forn) and str(nome_forn).strip() and str(nome_forn).strip().upper() not in ["SEM FORNECEDOR PRINCIPAL", "GERAL", "N/D", "NONE", "NAN"]:
+                    if pd.notna(cod_forn) and str(cod_forn).strip() and str(cod_forn) not in ["0", "None", "nan"]:
+                        try:
+                            resultado["fornecedor"] = f"{int(float(cod_forn))} - {str(nome_forn).strip()}"
+                        except Exception:
+                            resultado["fornecedor"] = f"{str(cod_forn).strip()} - {str(nome_forn).strip()}"
+                    else:
+                        resultado["fornecedor"] = str(nome_forn).strip()
+                elif resultado["comprador"]:
+                    resultado["fornecedor"] = f"{resultado['comprador']}"
+                elif resultado["departamento"] and resultado["departamento"] != "GERAL":
+                    resultado["fornecedor"] = f"{resultado['departamento']}"
+                else:
+                    resultado["fornecedor"] = f"PROD {produto_codigo}"
                 
                 emb_c = primeiro.get("EMBL_COMPRA", 1)
                 emb_t = primeiro.get("EMBL_TRANSFERENCIA", 1)
@@ -794,21 +814,97 @@ def obter_estruturas_e_bandejas(engine, tipo_exposicao_id: Optional[int] = None)
     return list(estruturas_dict.values())
 
 
+def sincronizar_metadados_itens_parquet(engine, campanha_id: Optional[str] = None) -> int:
+    """
+    Sincroniza departamento, comprador e fornecedor dos itens da campanha a partir do query.parquet.
+    """
+    parquet_path = "bdados/query.parquet"
+    import os
+    if not os.path.exists(parquet_path):
+        return 0
+
+    where_cid = "WHERE (ci.fornecedor IS NULL OR ci.fornecedor IN ('GERAL', 'N/D', '') OR ci.departamento IS NULL OR ci.departamento IN ('N/D', ''))"
+    params = {}
+    if campanha_id:
+        where_cid += " AND ci.campanha_id = :cid"
+        params["cid"] = campanha_id
+
+    try:
+        with engine.connect() as conn:
+            itens_pend = conn.execute(text(f"""
+                SELECT id, produto_codigo, fornecedor, departamento, comprador 
+                FROM campanha_itens ci
+                {where_cid}
+            """), params).fetchall()
+
+        if not itens_pend:
+            return 0
+
+        df = pd.read_parquet(parquet_path)
+        df.columns = [str(c).strip() for c in df.columns]
+        df_uniq = df.drop_duplicates(subset=["CODIGO_PRODUTO"])
+        map_prod = {int(r["CODIGO_PRODUTO"]): r for _, r in df_uniq.iterrows()}
+
+        atualizados = 0
+        with engine.begin() as conn:
+            for it in itens_pend:
+                pcod = int(it.produto_codigo)
+                if pcod in map_prod:
+                    row = map_prod[pcod]
+                    depto = str(row.get("DEPARTAMENTO", "")).strip() or "GERAL"
+                    comp = str(row.get("COMPRADOR", "")).strip() or ""
+                    
+                    cod_forn = row.get("COD_FORNECEDOR")
+                    nome_forn = row.get("FORNECEDOR") or row.get("RAZAO_FORN_PRINCIPAL")
+
+                    if pd.notna(nome_forn) and str(nome_forn).strip() and str(nome_forn).strip().upper() not in ["SEM FORNECEDOR PRINCIPAL", "GERAL", "N/D", "NONE", "NAN"]:
+                        if pd.notna(cod_forn) and str(cod_forn).strip() and str(cod_forn) not in ["0", "None", "nan"]:
+                            try:
+                                forn = f"{int(float(cod_forn))} - {str(nome_forn).strip()}"
+                            except Exception:
+                                forn = f"{str(cod_forn).strip()} - {str(nome_forn).strip()}"
+                        else:
+                            forn = str(nome_forn).strip()
+                    elif comp:
+                        forn = f"{comp}"
+                    elif depto and depto != "GERAL":
+                        forn = f"{depto}"
+                    else:
+                        forn = f"PROD {pcod}"
+
+                    conn.execute(text("""
+                        UPDATE campanha_itens
+                        SET fornecedor = :forn,
+                            departamento = :dep,
+                            comprador = :comp
+                        WHERE id = :id
+                    """), {"forn": forn, "dep": depto, "comp": comp, "id": it.id})
+                    atualizados += 1
+
+        return atualizados
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar metadados dos itens com parquet: {e}")
+        return 0
+
+
 def obter_itens_campanha_com_detalhes(engine, campanha_id: str) -> List[Dict[str, Any]]:
     """
     Carrega todos os itens da campanha e sua matriz de distribuição por loja.
     """
+    sincronizar_metadados_itens_parquet(engine, campanha_id)
+
     sql_itens = text("""
         SELECT 
             ci.id as item_id, ci.produto_codigo, ci.descricao_snapshot,
-            COALESCE(ci.fornecedor, ci.comprador, 'GERAL') AS fornecedor,
-            ci.departamento, ci.comprador,
+            COALESCE(NULLIF(ci.fornecedor, 'GERAL'), NULLIF(ci.comprador, ''), ci.departamento, 'FORNECEDOR DIVERSOS') AS fornecedor,
+            COALESCE(ci.departamento, 'GERAL') AS departamento,
+            COALESCE(ci.comprador, '') AS comprador,
             ci.embalagem_compra, ci.embalagem_transferencia,
             pd.altura_cm, pd.largura_cm, pd.profundidade_cm
         FROM campanha_itens ci
         LEFT JOIN produto_dimensoes pd ON pd.produto_codigo = ci.produto_codigo
         WHERE ci.campanha_id = :cid
-        ORDER BY COALESCE(ci.fornecedor, ci.comprador, 'GERAL'), ci.produto_codigo
+        ORDER BY COALESCE(NULLIF(ci.fornecedor, 'GERAL'), NULLIF(ci.comprador, ''), ci.departamento, 'FORNECEDOR DIVERSOS'), ci.produto_codigo
     """)
 
     sql_lojas = text("""
