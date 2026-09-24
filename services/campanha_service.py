@@ -30,16 +30,17 @@ LISTA_14_LOJAS = [
 
 def gerar_codigo_campanha(engine) -> str:
     """
-    Gera um código único e legível no formato CMP-YYYY-XXXXXX.
+    Gera um código único e legível no formato CMP-YYYY-XXXXXX baseado no maior sequencial.
     """
-    ano = datetime.now().year
+    ano = now_brazil().year
     with engine.connect() as conn:
-        count = conn.execute(text("""
-            SELECT COUNT(*) FROM campanhas 
+        max_seq = conn.execute(text("""
+            SELECT MAX(CAST(SUBSTRING(codigo_campanha FROM '[0-9]+$') AS INTEGER))
+            FROM campanhas 
             WHERE codigo_campanha LIKE :prefix
-        """), {"prefix": f"CMP-{ano}-%"}).scalar() or 0
+        """), {"prefix": f"CMP-{ano}-%"}).scalar()
         
-    proximo = count + 1
+    proximo = (max_seq or 0) + 1
     return f"CMP-{ano}-{proximo:06d}"
 
 
