@@ -24,6 +24,7 @@ from services.campanha_service import (
     LISTA_14_LOJAS
 )
 from services.campanha_calculo import calcular_dias_campanha
+from services.exportacao_campanha import gerar_excel_devolutiva_compras
 
 
 def _obter_tipos_exposicao(engine) -> List[Dict[str, Any]]:
@@ -46,8 +47,10 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
 
     tipos_exp = _obter_tipos_exposicao(engine)
     mapa_tipos_exp = {t["nome"]: t["id"] for t in tipos_exp}
-    mapa_id_tipos_exp = {t["id"]: t["nome"] for t in tipos_exp}
     lista_nomes_tipos = list(mapa_tipos_exp.keys())
+
+    # Índice padrão de "INATIVA"
+    idx_inativa_padrao = lista_nomes_tipos.index("INATIVA") if "INATIVA" in lista_nomes_tipos else 0
 
     lojas_db = _obter_lojas_cadastradas(engine)
     lojas_map = {l["codigo"]: l["nome"] for l in lojas_db}
@@ -121,11 +124,27 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         st.rerun()
 
     # =========================================================================
-    # ABA 4: DEVOLUTIVAS DE COMPRAS
+    # ABA 4: DEVOLUTIVAS DE COMPRAS (COM DOWNLOAD)
     # =========================================================================
     with tab_devolutivas:
-        st.subheader("Devolutivas de Faltas no CD15")
-        st.caption("Itens apontados pelo Supply com saldo insuficiente no CD15 para atendimento das lojas.")
+        st.subheader("📋 Devolutivas de Faltas no CD15 (Necessidade de Compra)")
+        st.caption("Itens apontados pelo Supply com saldo insuficiente no CD15 para atendimento das lojas da campanha.")
+
+        camp_selecionada_id = st.session_state.get("campanha_selecionada_id")
+        
+        # Botões de Download da Devolutiva
+        col_down1, col_down2 = st.columns(2)
+        if camp_selecionada_id:
+            with col_down1:
+                excel_dev_camp = gerar_excel_devolutiva_compras(engine, camp_selecionada_id)
+                st.download_button(
+                    label="📑 Baixar Excel de Devolutiva da Campanha Selecionada",
+                    data=excel_dev_camp,
+                    file_name=f"devolutiva_compras_campanha_selecionada_{date.today().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
 
         with engine.connect() as conn:
             devolutivas_df = pd.read_sql(text("""
@@ -134,6 +153,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     c.codigo_campanha AS "Campanha",
                     cd.produto_codigo AS "Código",
                     cd.descricao_snapshot AS "Descrição",
+                    COALESCE(ci.fornecedor, ci.comprador, 'GERAL') AS "Fornecedor",
                     cd.caixas_necessarias AS "Caixas Necessárias",
                     cd.caixas_cd_disponivel AS "Caixas CD15",
                     cd.caixas_falta AS "Caixas a Comprar",
@@ -150,6 +170,21 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
         if devolutivas_df.empty:
             st.success("🎉 Nenhuma pendência de compra em aberto no momento.")
         else:
+            with col_down2:
+                # Download consolidado de todas as devoluções
+                import io
+                out_all_dev = io.BytesIO()
+                with pd.ExcelWriter(out_all_dev, engine="openpyxl") as writer:
+                    devolutivas_df.to_excel(writer, sheet_name="Todas_Devolutivas", index=False)
+                st.download_button(
+                    label="📥 Baixar Excel Consolidado de TODAS as Devolutivas",
+                    data=out_all_dev.getvalue(),
+                    file_name=f"todas_devolutivas_compras_{date.today().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+            st.markdown("---")
             st.dataframe(devolutivas_df, use_container_width=True)
 
             # Opção de resolver pendência
@@ -186,21 +221,21 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
         # Cabeçalho da Campanha
         dias_camp = calcular_dias_campanha(camp["data_inicio"], camp["data_fim"])
         status_color = {
-            "RASCUNHO": "gray",
-            "ATIVA": "blue",
-            "ENVIADA_SUPPLY": "orange",
-            "EM_AVALIACAO_SUPPLY": "orange",
-            "PENDENCIA_COMPRAS": "red",
-            "FINALIZADA": "green",
-            "INATIVA": "red",
-            "CANCELADA": "red"
-        }.get(camp["status"], "gray")
+            "RASCUNHO": "#64748b",
+            "ATIVA": "#0284c7",
+            "ENVIADA_SUPPLY": "#d97706",
+            "EM_AVALIACAO_SUPPLY": "#d97706",
+            "PENDENCIA_COMPRAS": "#dc2626",
+            "FINALIZADA": "#16a34a",
+            "INATIVA": "#dc2626",
+            "CANCELADA": "#dc2626"
+        }.get(camp["status"], "#64748b")
 
-        st.markdown(f"### 🏷️ `{camp['codigo_campanha']}` — {camp['nome']} <span style='background-color:{status_color};color:white;padding:3px 8px;border-radius:4px;font-size:12px;'>{camp['status']}</span>", unsafe_allow_html=True)
+        st.markdown(f"### 🏷️ `{camp['codigo_campanha']}` — {camp['nome']} <span style='background-color:{status_color};color:white;padding:3px 8px;border-radius:4px;font-size:12px;font-weight:bold;'>{camp['status']}</span>", unsafe_allow_html=True)
         st.write(f"**Vigência:** {camp['data_inicio'].strftime('%d/%m/%Y')} até {camp['data_fim'].strftime('%d/%m/%Y')} ({dias_camp} dias) | **Criado por:** {camp['usuario_criacao']}")
 
         # Ações na Campanha
-        col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+        col_btn1, col_btn2, col_btn3, col_btn4, col_btn5 = st.columns([1.2, 1.2, 1.2, 1.5, 1.5])
 
         with col_btn1:
             with st.popover("✏️ Editar Capa"):
@@ -219,7 +254,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
 
         with col_btn2:
             if camp["status"] != "INATIVA":
-                if st.button("⏸️ Inativar Campanha", help="Suspende a campanha"):
+                if st.button("⏸️ Inativar", help="Suspende a campanha"):
                     suc, msg = inativar_campanha(engine, camp_id, usuario_atual)
                     if suc:
                         st.success(msg)
@@ -228,7 +263,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         st.error(msg)
 
         with col_btn3:
-            with st.popover("🔄 Replicar Campanha"):
+            with st.popover("🔄 Replicar"):
                 rep_nome = st.text_input("Novo Nome da Campanha:", value=f"Cópia de {camp['nome']}")
                 col_r1, col_r2 = st.columns(2)
                 rep_ini = col_r1.date_input("Nova Data Início:", value=date.today() + timedelta(days=7), key="rep_ini")
@@ -243,8 +278,19 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         st.error(msg)
 
         with col_btn4:
+            # Botão de Download da Devolutiva de Compras
+            excel_dev_btn = gerar_excel_devolutiva_compras(engine, camp_id)
+            st.download_button(
+                label="📑 Baixar Devolutiva",
+                data=excel_dev_btn,
+                file_name=f"devolutiva_{camp['codigo_campanha']}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Baixa a planilha de faltas no CD15 e sugestão de compra"
+            )
+
+        with col_btn5:
             if camp["status"] in ["RASCUNHO", "ATIVA", "PENDENCIA_COMPRAS"]:
-                if st.button("🚀 Enviar para Supply", type="primary", help="Envia os produtos e tipos de exposição para conferência física do Supply"):
+                if st.button("🚀 Enviar para Supply", type="primary", help="Envia os produtos e tipos de exposição ativos para conferência física do Supply"):
                     suc, msg = enviar_campanha_para_supply(engine, camp_id, usuario_atual)
                     if suc:
                         st.success(msg)
@@ -262,8 +308,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
         itens_campanha = obter_itens_campanha_com_detalhes(engine, camp_id)
 
         # Seção para Adicionar / Buscar Novo Produto no Parquet
-        with st.expander("🔍 Adicionar ou Pesquisar Produto no Mix", expanded=(len(itens_campanha) == 0)):
-            st.markdown("##### Buscar no Catálogo ERP Consinco (`query.parquet`)")
+        with st.expander("🔍 Adicionar Novo Produto ao Mix (Busca no ERP Consinco)", expanded=(len(itens_campanha) == 0)):
             col_b1, col_b2 = st.columns([3, 1])
             termo_busca = col_b1.text_input("Digite o Código Consinco ou Descrição do Produto:", key="busca_prod_termo")
 
@@ -286,7 +331,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         match_df = df_p_uniq[filtro].head(15)
                         if not match_df.empty:
                             opcoes_dict = {
-                                f"{int(row['CODIGO_PRODUTO'])} - {row['DESCRICAO_PRODUTO']}": int(row['CODIGO_PRODUTO'])
+                                f"{int(row['CODIGO_PRODUTO'])} - {row['DESCRICAO_PRODUTO']} [{row.get('FORNECEDOR') or row.get('COMPRADOR') or 'GERAL'}]": int(row['CODIGO_PRODUTO'])
                                 for _, row in match_df.iterrows()
                             }
                             sel_label = st.selectbox("Selecione o Produto Encontrado:", list(opcoes_dict.keys()))
@@ -305,30 +350,27 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     base_data_path=base_data_path
                 )
 
-                # Card Resumo do Produto
+                # Card Resumo do Produto (Embalagens Somente Leitura)
                 st.markdown("---")
                 st.markdown(f"#### Detalhes do Produto: `{prod_data['produto_codigo']}` — **{prod_data['descricao']}**")
+                st.caption(f"🏢 **Fornecedor:** {prod_data.get('fornecedor') or 'GERAL'} | 🏷️ **Departamento:** {prod_data.get('departamento') or 'N/D'} | 👤 **Comprador:** {prod_data.get('comprador') or 'N/D'}")
+                
                 c_m1, c_m2, c_m3, c_m4 = st.columns(4)
                 c_m1.metric("Estoque Total Lojas", f"{prod_data['estoque_total_lojas']:,.0f} un")
                 c_m2.metric("Estoque Disponível CD15", f"{prod_data['estoque_cd15']:,.0f} un")
                 c_m3.metric("Venda Média Diária", f"{prod_data['venda_media_diaria_total']:.1f} un/dia")
                 c_m4.metric(f"Venda Projetada ({dias_camp} dias)", f"{prod_data['venda_projetada_total']:.0f} un")
 
+                # Exibição informativa das embalagens (Somente Leitura para Comprador)
                 col_e1, col_e2 = st.columns(2)
-                emb_comp = col_e1.number_input("Embalagem de Compra (un/cx):", min_value=1, value=prod_data["embalagem_compra"])
-                emb_trans = col_e2.number_input("Embalagem de Transferência (un/cx):", min_value=1, value=prod_data["embalagem_transferencia"])
+                col_e1.info(f"📦 **Embalagem de Compra:** `{prod_data['embalagem_compra']}` un/cx *(Fixo do Cadastro ERP)*")
+                col_e2.info(f"🚚 **Embalagem de Transferência:** `{prod_data['embalagem_transferencia']}` un/cx *(Fixo do Cadastro ERP)*")
 
-                # Grid de Lojas para Compras
-                st.markdown("##### 🏪 Definição de Exposição e Sugestão por Loja")
-                st.caption("Selecione o tipo de exposição e, opcionalmente, sugira uma quantidade em unidades para cada loja.")
+                # Grid de Lojas para Compras com Padrão INATIVA
+                st.markdown("##### 🏪 Definição de Exposição e Participação por Loja")
+                st.info("💡 **Regra de Participação:** Todas as lojas iniciam com **INATIVA** (sem ponto extra e sem oferta). Selecione o tipo de exposição (ex: `ILHA`, `PONTA DE GÔNDOLA`) apenas nas lojas que participarão da campanha.")
 
-                # Preparação da lista de inputs
                 lojas_inputs = []
-                
-                # Formato de tabela com colunas
-                st.write("**Matriz das 14 Lojas Participantes:**")
-                
-                # Criar controle em 2 colunas para ficar elegante
                 col_g1, col_g2 = st.columns(2)
                 metade = len(LISTA_14_LOJAS) // 2
 
@@ -337,29 +379,34 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     with container_col:
                         with st.container(border=True):
                             lj_nome = lojas_map.get(lj_cod, f"Loja {lj_cod}")
-                            st.write(f"🏬 **{lj_cod} - {lj_nome}**")
-                            
                             lj_detalhe = prod_data["lojas_detalhe"].get(lj_cod, {})
                             st_lj = lj_detalhe.get("estoque_loja", 0.0)
                             vp_lj = lj_detalhe.get("venda_projetada", 0.0)
                             
+                            st.write(f"🏬 **{lj_cod} - {lj_nome}**")
                             st.caption(f"Estoque Atual: **{st_lj:,.0f} un** | Venda Proj: **{vp_lj:.0f} un**")
                             
                             tipo_sel = st.selectbox(
                                 "Tipo de Exposição:",
                                 options=lista_nomes_tipos,
-                                index=0,
+                                index=idx_inativa_padrao,
                                 key=f"tipo_exp_{prod_data['produto_codigo']}_{lj_cod}"
                             )
                             
-                            vol_sug = st.number_input(
-                                "Sugestão Comprador (Unidades):",
-                                min_value=0,
-                                value=0,
-                                step=1,
-                                key=f"vol_sug_{prod_data['produto_codigo']}_{lj_cod}",
-                                help="Deixe 0 se desejar que o Supply calcule o volume com base na capacidade física da bandeja."
-                            )
+                            is_inativa = tipo_sel.upper() == "INATIVA"
+                            if is_inativa:
+                                st.caption("⏸️ *Loja não participará do ponto extra / Não enviada ao Supply.*")
+                                vol_sug = 0
+                            else:
+                                st.success(f"✅ **Ativa:** Exposição em `{tipo_sel}`")
+                                vol_sug = st.number_input(
+                                    "Sugestão Comprador (Unidades):",
+                                    min_value=0,
+                                    value=0,
+                                    step=1,
+                                    key=f"vol_sug_{prod_data['produto_codigo']}_{lj_cod}",
+                                    help="Deixe 0 se desejar que o Supply calcule o volume com base na capacidade física da bandeja."
+                                )
 
                             lojas_inputs.append({
                                 "loja_codigo": lj_cod,
@@ -377,10 +424,13 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         campanha_id=camp_id,
                         produto_codigo=prod_data["produto_codigo"],
                         descricao=prod_data["descricao"],
-                        embalagem_compra=emb_comp,
-                        embalagem_transferencia=emb_trans,
+                        embalagem_compra=prod_data["embalagem_compra"],
+                        embalagem_transferencia=prod_data["embalagem_transferencia"],
                         dados_lojas=lojas_inputs,
-                        usuario=usuario_atual
+                        usuario=usuario_atual,
+                        fornecedor=prod_data.get("fornecedor"),
+                        departamento=prod_data.get("departamento"),
+                        comprador=prod_data.get("comprador")
                     )
                     if suc:
                         st.success(msg)
@@ -388,15 +438,44 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     else:
                         st.error(msg)
 
-        # Exibição dos Itens Já Cadastrados
+        # Exibição dos Itens Já Cadastrados com Ordenação por Fornecedor
         if not itens_campanha:
             st.info("Nenhum produto cadastrado nesta campanha ainda. Use o campo de busca acima para adicionar.")
         else:
-            st.markdown(f"#### Itens Cadastrados na Campanha ({len(itens_campanha)} produtos)")
-            for it in itens_campanha:
-                with st.expander(f"📦 `{it['produto_codigo']}` — {it['descricao_snapshot']} (Emb Transf: {it['embalagem_transferencia']} un)"):
+            st.markdown("---")
+            col_head_it, col_ord = st.columns([2, 2])
+            col_head_it.markdown(f"#### Itens Cadastrados na Campanha ({len(itens_campanha)} produtos)")
+            
+            criterio_ord = col_ord.selectbox(
+                "Ordenar lista de itens por:",
+                ["🏢 Fornecedor (A-Z)", "🔢 Código do Produto", "📝 Descrição do Produto", "🏷️ Departamento", "🌟 Mais Lojas Ativas"],
+                key="ord_itens_mix_compras"
+            )
+
+            # Aplicação da ordenação
+            if "Fornecedor" in criterio_ord:
+                itens_ordenados = sorted(itens_campanha, key=lambda x: str(x.get("fornecedor") or "").upper())
+            elif "Código" in criterio_ord:
+                itens_ordenados = sorted(itens_campanha, key=lambda x: int(x.get("produto_codigo") or 0))
+            elif "Descrição" in criterio_ord:
+                itens_ordenados = sorted(itens_campanha, key=lambda x: str(x.get("descricao_snapshot") or "").upper())
+            elif "Departamento" in criterio_ord:
+                itens_ordenados = sorted(itens_campanha, key=lambda x: str(x.get("departamento") or "").upper())
+            elif "Lojas Ativas" in criterio_ord:
+                itens_ordenados = sorted(itens_campanha, key=lambda x: len(x.get("lojas_ativas", [])), reverse=True)
+            else:
+                itens_ordenados = itens_campanha
+
+            for it in itens_ordenados:
+                qtd_ativas = len(it.get("lojas_ativas", []))
+                qtd_inativas = len(it.get("lojas", [])) - qtd_ativas
+                status_lojas_tag = f"🟢 {qtd_ativas} lojas ativas" if qtd_ativas > 0 else "⚪ 0 lojas ativas (INATIVO)"
+                
+                exp_label = f"📦 [{it.get('fornecedor') or 'GERAL'}] `{it['produto_codigo']}` — {it['descricao_snapshot']} | {status_lojas_tag}"
+                
+                with st.expander(exp_label):
                     c_act1, c_act2 = st.columns([4, 1])
-                    c_act1.write(f"**Embalagem Compra:** {it['embalagem_compra']} | **Embalagem Transferência:** {it['embalagem_transferencia']}")
+                    c_act1.write(f"🏢 **Fornecedor:** {it.get('fornecedor') or 'GERAL'} | 🏷️ **Depto:** {it.get('departamento') or 'N/D'} | 📦 **Emb Compra:** {it['embalagem_compra']} un | 🚚 **Emb Transf:** {it['embalagem_transferencia']} un")
                     if c_act2.button("🗑️ Remover do Mix", key=f"del_prod_{it['produto_codigo']}", type="secondary"):
                         suc, msg = remover_item_campanha(engine, camp_id, it["produto_codigo"], usuario_atual)
                         if suc:
@@ -409,7 +488,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     lojas_it_df = pd.DataFrame([
                         {
                             "Loja": f"{l['loja_codigo']} - {l['loja_nome']}",
-                            "Exposição": l["tipo_exposicao_nome"] or "Não Definido",
+                            "Participação": "⏸️ INATIVA" if str(l["tipo_exposicao_nome"]).upper() == "INATIVA" else f"✅ {l['tipo_exposicao_nome']}",
                             "Estoque Loja": f"{float(l['estoque_loja'] or 0):,.0f} un",
                             "Venda Proj": f"{float(l['venda_projetada'] or 0):.0f} un",
                             "Sugestão Compras": f"{int(l['volume_comprador'] or 0)} un",
@@ -419,4 +498,5 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         }
                         for l in it["lojas"]
                     ])
-                    st.dataframe(lojas_it_df, use_container_width=True)
+                    st.dataframe(lojas_it_df, use_container_width=True, hide_index=True)
+

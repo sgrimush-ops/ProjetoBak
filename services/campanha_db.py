@@ -63,6 +63,7 @@ def create_campanhas_tables(engine):
             conn.execute(text("""
                 INSERT INTO tipos_exposicao (nome, descricao, ativo)
                 VALUES 
+                    ('INATIVA', 'Loja não participante da exposição / sem oferta', TRUE),
                     ('PONTA DE GÔNDOLA', 'Exposição em cabeceira de gôndola completa', TRUE),
                     ('MEIA PONTA', 'Exposição em metade da cabeceira de gôndola', TRUE),
                     ('ILHA', 'Exposição central no corredor em formato de ilha/pallet', TRUE),
@@ -206,12 +207,19 @@ def create_campanhas_tables(engine):
                     campanha_id VARCHAR(50) NOT NULL REFERENCES campanhas(id) ON DELETE CASCADE,
                     produto_codigo INTEGER NOT NULL,
                     descricao_snapshot VARCHAR(255) NOT NULL,
+                    fornecedor VARCHAR(150),
+                    departamento VARCHAR(100),
+                    comprador VARCHAR(100),
                     embalagem_compra INTEGER NOT NULL DEFAULT 1,
                     embalagem_transferencia INTEGER NOT NULL DEFAULT 1,
                     criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
                     UNIQUE(campanha_id, produto_codigo)
                 );
                 CREATE INDEX IF NOT EXISTS idx_campanha_itens_camp ON campanha_itens(campanha_id);
+
+                ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS fornecedor VARCHAR(150);
+                ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS departamento VARCHAR(100);
+                ALTER TABLE campanha_itens ADD COLUMN IF NOT EXISTS comprador VARCHAR(100);
             """))
 
             # 6. MATRIZ DE DISTRIBUIÇÃO POR LOJA
@@ -248,6 +256,7 @@ def create_campanhas_tables(engine):
                     campanha_id VARCHAR(50) NOT NULL REFERENCES campanhas(id) ON DELETE CASCADE,
                     produto_codigo INTEGER NOT NULL,
                     descricao_snapshot VARCHAR(255) NOT NULL,
+                    fornecedor VARCHAR(150),
                     caixas_necessarias INTEGER NOT NULL,
                     caixas_cd_disponivel INTEGER NOT NULL,
                     caixas_falta INTEGER NOT NULL,
@@ -258,6 +267,8 @@ def create_campanhas_tables(engine):
                     usuario_resolucao VARCHAR(100)
                 );
                 CREATE INDEX IF NOT EXISTS idx_campanha_devolutivas_camp ON campanha_devolutivas(campanha_id);
+
+                ALTER TABLE campanha_devolutivas ADD COLUMN IF NOT EXISTS fornecedor VARCHAR(150);
             """))
 
             # 8. AUDITORIA E HISTÓRICO DE MUTAÇÕES

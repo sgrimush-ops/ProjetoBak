@@ -32,6 +32,7 @@ def gerar_excel_transferencia_operacional(engine, campanha_id: str) -> bytes:
         SELECT 
             ci.produto_codigo AS "Código Consinco",
             ci.descricao_snapshot AS "Descrição do Produto",
+            COALESCE(ci.fornecedor, ci.comprador, 'GERAL') AS "Fornecedor",
             cl.loja_codigo AS "Loja Destino",
             cl.caixas_transferencia AS "Quantidade em Caixas",
             ci.embalagem_transferencia AS "Embalagem Transferência",
@@ -42,7 +43,9 @@ def gerar_excel_transferencia_operacional(engine, campanha_id: str) -> bytes:
         JOIN campanha_itens ci ON ci.id = cl.campanha_item_id
         JOIN campanhas c ON c.id = ci.campanha_id
         LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
-        WHERE ci.campanha_id = :cid
+        WHERE ci.campanha_id = :cid 
+          AND UPPER(COALESCE(te.nome, '')) != 'INATIVA'
+          AND COALESCE(cl.caixas_transferencia, 0) > 0
         ORDER BY ci.produto_codigo, cl.loja_codigo
     """)
 
@@ -128,7 +131,8 @@ def gerar_excel_consulta_loja(engine, campanha_id: str, loja_codigo: Optional[st
         JOIN campanhas c ON c.id = ci.campanha_id
         JOIN lojas l ON l.codigo = cl.loja_codigo
         LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
-        WHERE ci.campanha_id = :cid {where_loja}
+        WHERE ci.campanha_id = :cid 
+          AND UPPER(COALESCE(te.nome, '')) != 'INATIVA' {where_loja}
         ORDER BY cl.loja_codigo, ci.produto_codigo
     """)
 
@@ -177,7 +181,9 @@ def gerar_pdf_campanha_loja(engine, campanha_id: str, loja_codigo: str) -> bytes
             FROM campanha_lojas cl
             JOIN campanha_itens ci ON ci.id = cl.campanha_item_id
             LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
-            WHERE ci.campanha_id = :cid AND cl.loja_codigo = :loja
+            WHERE ci.campanha_id = :cid 
+              AND cl.loja_codigo = :loja
+              AND UPPER(COALESCE(te.nome, '')) != 'INATIVA'
             ORDER BY ci.produto_codigo
         """), {"cid": campanha_id, "loja": lj}).fetchall()
 

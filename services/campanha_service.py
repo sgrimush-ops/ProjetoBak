@@ -467,6 +467,9 @@ def carregar_dados_produto_consolidado(
             if not df_prod.empty:
                 primeiro = df_prod.iloc[0]
                 resultado["descricao"] = str(primeiro.get("DESCRICAO_PRODUTO", "")).strip()
+                resultado["departamento"] = str(primeiro.get("DEPARTAMENTO", "")).strip()
+                resultado["comprador"] = str(primeiro.get("COMPRADOR", "")).strip()
+                resultado["fornecedor"] = str(primeiro.get("FORNECEDOR", "")).strip() or resultado["comprador"] or "GERAL"
                 
                 emb_c = primeiro.get("EMBL_COMPRA", 1)
                 emb_t = primeiro.get("EMBL_TRANSFERENCIA", 1)
@@ -520,7 +523,10 @@ def salvar_item_campanha_compras(
     embalagem_compra: int,
     embalagem_transferencia: int,
     dados_lojas: List[Dict[str, Any]],
-    usuario: str
+    usuario: str,
+    fornecedor: Optional[str] = None,
+    departamento: Optional[str] = None,
+    comprador: Optional[str] = None
 ) -> Tuple[bool, str]:
     """
     Adiciona ou atualiza um item na campanha e sua matriz de 14 lojas pelo Comprador.
@@ -530,11 +536,15 @@ def salvar_item_campanha_compras(
             # 1. Upsert no item
             item_row = conn.execute(text("""
                 INSERT INTO campanha_itens (
-                    campanha_id, produto_codigo, descricao_snapshot, embalagem_compra, embalagem_transferencia
+                    campanha_id, produto_codigo, descricao_snapshot, fornecedor, departamento, comprador,
+                    embalagem_compra, embalagem_transferencia
                 )
-                VALUES (:cid, :pcod, :desc, :e_c, :e_t)
+                VALUES (:cid, :pcod, :desc, :forn, :dep, :comp, :e_c, :e_t)
                 ON CONFLICT (campanha_id, produto_codigo) DO UPDATE
                 SET descricao_snapshot = EXCLUDED.descricao_snapshot,
+                    fornecedor = COALESCE(EXCLUDED.fornecedor, campanha_itens.fornecedor),
+                    departamento = COALESCE(EXCLUDED.departamento, campanha_itens.departamento),
+                    comprador = COALESCE(EXCLUDED.comprador, campanha_itens.comprador),
                     embalagem_compra = EXCLUDED.embalagem_compra,
                     embalagem_transferencia = EXCLUDED.embalagem_transferencia
                 RETURNING id;
@@ -542,6 +552,9 @@ def salvar_item_campanha_compras(
                 "cid": campanha_id,
                 "pcod": int(produto_codigo),
                 "desc": descricao,
+                "forn": fornecedor or "GERAL",
+                "dep": departamento or "",
+                "comp": comprador or "",
                 "e_c": int(embalagem_compra or 1),
                 "e_t": int(embalagem_transferencia or 1)
             }).fetchone()
@@ -788,12 +801,14 @@ def obter_itens_campanha_com_detalhes(engine, campanha_id: str) -> List[Dict[str
     sql_itens = text("""
         SELECT 
             ci.id as item_id, ci.produto_codigo, ci.descricao_snapshot,
+            COALESCE(ci.fornecedor, ci.comprador, 'GERAL') AS fornecedor,
+            ci.departamento, ci.comprador,
             ci.embalagem_compra, ci.embalagem_transferencia,
             pd.altura_cm, pd.largura_cm, pd.profundidade_cm
         FROM campanha_itens ci
         LEFT JOIN produto_dimensoes pd ON pd.produto_codigo = ci.produto_codigo
         WHERE ci.campanha_id = :cid
-        ORDER BY ci.produto_codigo
+        ORDER BY COALESCE(ci.fornecedor, ci.comprador, 'GERAL'), ci.produto_codigo
     """)
 
     sql_lojas = text("""
@@ -830,6 +845,18 @@ def obter_itens_campanha_com_detalhes(engine, campanha_id: str) -> List[Dict[str
     for it in itens_rows:
         item_dict = dict(it._mapping)
         item_dict["lojas"] = lojas_por_item.get(it.item_id, [])
+        
+        # Filtra lojas ativas (diferentes de 'INATIVA')
+        lojas_ativas = [l for l in item_dict["lojas"] if str(l.get("tipo_exposicao_nome") or "").upper() != "INATIVA"]
+        item_dict["lojas_ativas"] = lojas_ativas
+        item_dict["total_lojas_ativas"] = len(lojas_ativas)
+
+        if len(lojas_ativas) == 0:
+            item_dict["status_supply"] = "INATIVO"
+        elif all(int(l.get("volume_final_supply") or 0) > 0 for l in lojas_ativas):
+            item_dict["status_supply"] = "AVALIADO"
+        else:
+            item_dict["status_supply"] = "PENDENTE"
         resultado.append(item_dict)
 
     return resultado
@@ -962,12 +989,15 @@ def finalizar_avaliacao_campanha(engine, campanha_id: str, usuario: str) -> Tupl
     Finaliza formalmente a campanha pelo Supply, alterando seu status para FINALIZADA.
     """
     with engine.connect() as conn:
-        # Verifica se há pendências de lojas sem volume definido
+        # Verifica se há pendências de lojas ativas sem volume definido
         sem_vol = conn.execute(text("""
             SELECT COUNT(*) 
             FROM campanha_lojas cl
             JOIN campanha_itens ci ON ci.id = cl.campanha_item_id
-            WHERE ci.campanha_id = :cid AND (cl.volume_final_supply IS NULL OR cl.volume_final_supply < 0)
+            LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
+            WHERE ci.campanha_id = :cid 
+              AND UPPER(COALESCE(te.nome, '')) != 'INATIVA'
+              AND (cl.volume_final_supply IS NULL OR cl.volume_final_supply < 0)
         """), {"cid": campanha_id}).scalar() or 0
 
         if sem_vol > 0:

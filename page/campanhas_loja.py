@@ -129,12 +129,13 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
             c.data_fim,
             c.status,
             c.observacoes,
-            COUNT(DISTINCT ci.produto_codigo) as total_skus,
-            SUM(COALESCE(cl.volume_final_supply, 0)) as total_unidades,
-            SUM(COALESCE(cl.caixas_transferencia, 0)) as total_caixas
+            COUNT(DISTINCT CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN ci.produto_codigo END) as total_skus,
+            SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.volume_final_supply, 0) ELSE 0 END) as total_unidades,
+            SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.caixas_transferencia, 0) ELSE 0 END) as total_caixas
         FROM campanhas c
         JOIN campanha_itens ci ON ci.campanha_id = c.id
         JOIN campanha_lojas cl ON cl.campanha_item_id = ci.id
+        LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
         WHERE {where_sql}
         GROUP BY c.id, c.codigo_campanha, c.nome, c.data_inicio, c.data_fim, c.status, c.observacoes
         ORDER BY c.data_inicio ASC, c.nome ASC
@@ -209,7 +210,9 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
                     FROM campanha_lojas cl
                     JOIN campanha_itens ci ON ci.id = cl.campanha_item_id
                     LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
-                    WHERE ci.campanha_id = :cid AND cl.loja_codigo = :loja
+                    WHERE ci.campanha_id = :cid 
+                      AND cl.loja_codigo = :loja
+                      AND UPPER(COALESCE(te.nome, '')) != 'INATIVA'
                     ORDER BY ci.produto_codigo
                 """)
 
@@ -267,7 +270,8 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
                     JOIN campanha_itens ci ON ci.id = cl.campanha_item_id
                     JOIN lojas l ON l.codigo = cl.loja_codigo
                     LEFT JOIN tipos_exposicao te ON te.id = cl.tipo_exposicao_id
-                    WHERE ci.campanha_id = :cid {where_lojas_cons}
+                    WHERE ci.campanha_id = :cid 
+                      AND UPPER(COALESCE(te.nome, '')) != 'INATIVA' {where_lojas_cons}
                     ORDER BY cl.loja_codigo, ci.produto_codigo
                 """)
 

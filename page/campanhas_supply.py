@@ -65,20 +65,75 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
         st.warning("Esta campanha não possui itens cadastrados pelo Compras.")
         return
 
-    # Progresso da avaliação
-    itens_avaliados = sum(
-        1 for it in itens
-        if any(l.get("volume_final_supply", 0) > 0 for l in it["lojas"])
-    )
-    pct = (itens_avaliados / len(itens)) * 100 if len(itens) > 0 else 0
-    st.progress(pct / 100, text=f"Progresso da Análise: {itens_avaliados} de {len(itens)} produtos avaliados ({pct:.0f}%)")
+    # Progresso e Estatísticas da Avaliação
+    total_itens = len(itens)
+    itens_pendentes = sum(1 for it in itens if it.get("status_supply") == "PENDENTE")
+    itens_avaliados = sum(1 for it in itens if it.get("status_supply") == "AVALIADO")
+    itens_inativos = sum(1 for it in itens if it.get("status_supply") == "INATIVO")
+    
+    concluidos = itens_avaliados + itens_inativos
+    pct = (concluidos / total_itens) * 100 if total_itens > 0 else 0
+
+    c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+    c_p1.metric("Total de Produtos", total_itens)
+    c_p2.metric("🟡 Pendentes de Avaliação", itens_pendentes)
+    c_p3.metric("✅ Avaliados pelo Supply", itens_avaliados)
+    c_p4.metric("⚪ Sem Lojas Ativas (Inativos)", itens_inativos)
+
+    st.progress(pct / 100, text=f"Progresso da Análise: {concluidos} de {total_itens} produtos concluídos ({pct:.0f}%)")
 
     st.markdown("---")
 
-    # Seletor de Item da Campanha
-    itens_labels = {f"{it['produto_codigo']} — {it['descricao_snapshot']}": it for it in itens}
-    sel_item_label = st.selectbox("Selecione o Produto para Analisar:", list(itens_labels.keys()), key="sel_item_supply")
+    # -------------------------------------------------------------------------
+    # SELETOR DE ITENS COM DISCRIMINAÇÃO CLARA DE STATUS
+    # -------------------------------------------------------------------------
+    col_filtro_it, col_sel_it = st.columns([1, 2])
+    filtro_status_item = col_filtro_it.radio(
+        "Filtrar itens por status:",
+        ["Todos", "🟡 Apenas Pendentes", "✅ Apenas Avaliados"],
+        horizontal=True,
+        key="filtro_status_item_supply"
+    )
+
+    if filtro_status_item == "🟡 Apenas Pendentes":
+        itens_filtrados = [it for it in itens if it.get("status_supply") == "PENDENTE"]
+    elif filtro_status_item == "✅ Apenas Avaliados":
+        itens_filtrados = [it for it in itens if it.get("status_supply") == "AVALIADO"]
+    else:
+        itens_filtrados = itens
+
+    if not itens_filtrados:
+        st.info("Nenhum item corresponde ao filtro selecionado.")
+        return
+
+    # Criação dos rótulos descritivos no SelectBox
+    itens_labels: Dict[str, Dict[str, Any]] = {}
+    for it in itens_filtrados:
+        st_supply = it.get("status_supply", "PENDENTE")
+        qtd_atv = len(it.get("lojas_ativas", []))
+        
+        if st_supply == "AVALIADO":
+            tag = f"✅ [AVALIADO ({qtd_atv} lj)]"
+        elif st_supply == "INATIVO":
+            tag = "⚪ [INATIVO (0 lj)]"
+        else:
+            tag = f"🟡 [PENDENTE ({qtd_atv} lj)]"
+
+        label = f"{tag} {it['produto_codigo']} — {it['descricao_snapshot']} [{it.get('fornecedor') or 'GERAL'}]"
+        itens_labels[label] = it
+
+    sel_item_label = col_sel_it.selectbox("Selecione o Produto para Analisar / Fechar:", list(itens_labels.keys()), key="sel_item_supply")
     item_atual = itens_labels[sel_item_label]
+    lojas_ativas = item_atual.get("lojas_ativas", [])
+
+    st.markdown(f"### 📦 `{item_atual['produto_codigo']}` — **{item_atual['descricao_snapshot']}**")
+    st.caption(f"🏢 **Fornecedor:** {item_atual.get('fornecedor') or 'GERAL'} | 🏷️ **Departamento:** {item_atual.get('departamento') or 'N/D'} | 🚚 **Embalagem Transf:** {item_atual['embalagem_transferencia']} un | 📦 **Lojas Ativas Participantes:** {len(lojas_ativas)} de 14")
+
+    # Se todas as lojas forem INATIVA
+    if len(lojas_ativas) == 0:
+        st.warning("⚪ **Produto Inativo:** Todas as 14 lojas foram configuradas como **INATIVA** pelo Compras para esta campanha. Nenhuma análise física ou abastecimento é necessário pelo Supply.")
+        st.markdown("---")
+        return
 
     # Carrega dados atualizados do parquet e dimensões
     prod_consolidado = carregar_dados_produto_consolidado(
@@ -164,26 +219,30 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             col_res3.metric("Capacidade Física para este SKU", f"{capacidade_calculada_sku} unidades", delta="Calculado")
 
     # -------------------------------------------------------------------------
-    # SEÇÃO 3: ANÁLISE LOJA A LOJA E FECHAMENTO DE VOLUME
+    # SEÇÃO 3: ANÁLISE LOJA A LOJA E FECHAMENTO DE VOLUME (SOMENTE LOJAS ATIVAS)
     # -------------------------------------------------------------------------
-    st.subheader("🏪 3. Revisão Loja a Loja e Fechamento do Supply")
-    st.caption("Ajuste o volume final por loja. O sistema calculará as caixas fechadas de transferência automaticamente.")
+    st.subheader(f"🏪 3. Fechamento do Supply por Loja ({len(lojas_ativas)} lojas participantes)")
+    st.caption("Ajuste o volume final por loja participante. Lojas 'INATIVA' foram excluídas automaticamente pois não terão oferta.")
 
-    emb_transf = item_atual["embalagem_transferencia"] or 1
+    emb_transf = max(1, int(item_atual["embalagem_transferencia"] or 1))
     fechamento_inputs = []
     total_caixas_previstas = 0
     total_unidades_efetivas = 0
 
     col_h1, col_h2 = st.columns(2)
-    metade = len(item_atual["lojas"]) // 2
+    metade = (len(lojas_ativas) + 1) // 2
 
-    for i, lj in enumerate(item_atual["lojas"]):
+    for i, lj in enumerate(lojas_ativas):
         container_col = col_h1 if i < metade else col_h2
         with container_col:
             with st.container(border=True):
                 lj_cod = lj["loja_codigo"]
                 lj_nome = lj["loja_nome"]
-                st.write(f"🏬 **{lj_cod} - {lj_nome}** [{lj['tipo_exposicao_nome'] or 'Exposição Geral'}]")
+                tipo_exp_definido = lj.get("tipo_exposicao_nome") or "Exposição Geral"
+                
+                # Cabeçalho da loja com tipo de exposição SOMENTE LEITURA (definido pelo compras)
+                st.write(f"🏬 **{lj_cod} - {lj_nome}**")
+                st.markdown(f"🏷️ **Exposição Definida pelo Compras:** <span style='background-color:#0284c7;color:white;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold;'>{tipo_exp_definido}</span>", unsafe_allow_html=True)
 
                 # Snapshot de dados da loja
                 c_s1, c_s2, c_s3 = st.columns(3)
@@ -228,14 +287,14 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     with st.container(border=True):
         col_cd1, col_cd2, col_cd3, col_cd4 = st.columns(4)
         col_cd1.metric("Estoque CD15 (Físico)", f"{saldo_cd15_cx:,.0f} cx", f"{saldo_cd15_un:,.0f} un")
-        col_cd2.metric("Necessidade Total das Lojas", f"{total_caixas_previstas:,.0f} cx", f"{total_unidades_efetivas:,.0f} un")
+        col_cd2.metric("Demanda das Lojas Ativas", f"{total_caixas_previstas:,.0f} cx", f"{total_unidades_efetivas:,.0f} un")
         col_cd3.metric("Transferência Viável", f"{cx_atendidas:,.0f} cx", delta="Atendido" if cx_atendidas > 0 else "Zerado")
         
         delta_color = "normal" if cx_falta == 0 else "inverse"
         col_cd4.metric("Falta no CD15 (Comprar)", f"{cx_falta:,.0f} cx", delta="Crítico" if cx_falta > 0 else "OK", delta_color=delta_color)
 
         if status_cd == "OK":
-            st.success("✅ Estoque pleno no CD15 para cobrir 100% da demanda de todas as 14 lojas.")
+            st.success(f"✅ Estoque pleno no CD15 para cobrir 100% da demanda das {len(lojas_ativas)} lojas ativas.")
         elif status_cd == "PARCIAL":
             st.warning(f"⚠️ Estoque parcial no CD15. Há {saldo_cd15_cx} cx disponíveis para atender {total_caixas_previstas} cx necessárias. Foi gerada pendência de {cx_falta} cx para compras.")
         else:
@@ -298,3 +357,4 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+
