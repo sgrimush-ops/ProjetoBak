@@ -15,6 +15,7 @@ from services.campanha_service import (
     criar_campanha,
     atualizar_campanha,
     inativar_campanha,
+    excluir_campanha,
     replicar_campanha,
     carregar_dados_produto_consolidado,
     salvar_item_campanha_compras,
@@ -45,6 +46,9 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
     st.caption("Criação de campanhas, definição de mix promocional e tipos de exposição por loja.")
 
     usuario_atual = st.session_state.get("username", "compras")
+    role_str = str(st.session_state.get("role", "")).strip().lower()
+    cargo_str = str(st.session_state.get("cargo", "")).strip().lower()
+    is_admin = role_str == "admin" or "admin" in cargo_str or usuario_atual in ["admin", "administrador"]
 
     tipos_exp = _obter_tipos_exposicao(engine)
     mapa_tipos_exp = {t["nome"]: t["id"] for t in tipos_exp}
@@ -159,8 +163,8 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 c.observacoes,
                 COUNT(DISTINCT ci.produto_codigo) as total_skus,
                 (SELECT COUNT(*) FROM campanha_devolutivas cd WHERE cd.campanha_id = c.id AND cd.situacao = 'PENDENTE') as total_pendencias,
-                SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.volume_final_supply, 0) ELSE 0 END) as total_unidades,
-                SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.caixas_transferencia, 0) ELSE 0 END) as total_caixas
+                SUM(CASE WHEN c.status NOT IN ('INATIVA', 'CANCELADA') AND UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.volume_final_supply, 0) ELSE 0 END) as total_unidades,
+                SUM(CASE WHEN c.status NOT IN ('INATIVA', 'CANCELADA') AND UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.caixas_transferencia, 0) ELSE 0 END) as total_caixas
             FROM campanhas c
             LEFT JOIN campanha_itens ci ON ci.campanha_id = c.id
             LEFT JOIN campanha_lojas cl ON cl.campanha_item_id = ci.id
@@ -176,14 +180,15 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
         if not campanhas_lista:
             st.info("Nenhuma campanha localizada para os filtros selecionados.")
         else:
-            # Métricas Gerais da Consulta
-            tot_skus_c = sum(c.total_skus or 0 for c in campanhas_lista)
-            tot_un_c = sum(c.total_unidades or 0 for c in campanhas_lista)
-            tot_cx_c = sum(c.total_caixas or 0 for c in campanhas_lista)
-            tot_pend_c = sum(c.total_pendencias or 0 for c in campanhas_lista)
+            # Métricas Gerais da Consulta (Exclui inativas/canceladas do faturamento e caixas)
+            campanhas_ativas_count = sum(1 for c in campanhas_lista if c.status not in ('INATIVA', 'CANCELADA'))
+            tot_skus_c = sum(c.total_skus or 0 for c in campanhas_lista if c.status not in ('INATIVA', 'CANCELADA'))
+            tot_un_c = sum(c.total_unidades or 0 for c in campanhas_lista if c.status not in ('INATIVA', 'CANCELADA'))
+            tot_cx_c = sum(c.total_caixas or 0 for c in campanhas_lista if c.status not in ('INATIVA', 'CANCELADA'))
+            tot_pend_c = sum(c.total_pendencias or 0 for c in campanhas_lista if c.status not in ('INATIVA', 'CANCELADA'))
 
             cm_1, cm_2, cm_3, cm_4 = st.columns(4)
-            cm_1.metric("Campanhas Filtradas", len(campanhas_lista))
+            cm_1.metric("Campanhas Ativas / Filtradas", f"{campanhas_ativas_count} / {len(campanhas_lista)}")
             cm_2.metric("Total de Produtos (SKUs)", tot_skus_c)
             cm_3.metric("Volume Aprovado (Un)", f"{tot_un_c:,.0f} un")
             cm_4.metric("Caixas a Transferir / Pendências", f"{tot_cx_c:,.0f} cx", f"{tot_pend_c} faltas CD" if tot_pend_c > 0 else "0 faltas")
@@ -217,12 +222,35 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                             key=f"btn_dev_exp_{c.campanha_id}"
                         )
 
+                    if is_admin:
+                        with col_cact3:
+                            with st.popover("🗑️ Excluir Campanha (Admin)"):
+                                st.warning(f"Excluir permanentemente `{c.codigo_campanha}` e limpar todos os registros de teste?")
+                                if st.button("Confirmar Exclusão", type="primary", key=f"del_camp_list_{c.campanha_id}"):
+                                    suc_d, msg_d = excluir_campanha(engine, c.campanha_id, usuario_atual)
+                                    if suc_d:
+                                        st.success(msg_d)
+                                        if st.session_state.get("campanha_selecionada_id") == c.campanha_id:
+                                            st.session_state["campanha_selecionada_id"] = None
+                                        st.rerun()
+                                    else:
+                                        st.error(msg_d)
+
     # =========================================================================
-    # ABA 4: DEVOLUTIVAS DE COMPRAS (COM DOWNLOAD)
+    # ABA 4: DEVOLUTIVAS DE COMPRAS (COM DOWNLOAD E FILTRO DE PENDENTES)
     # =========================================================================
     with tab_devolutivas:
         st.subheader("📋 Devolutivas de Faltas no CD15 (Necessidade de Compra)")
         st.caption("Itens apontados pelo Supply com saldo insuficiente no CD15 para atendimento das lojas da campanha.")
+
+        col_filtro_dev1, col_filtro_dev2 = st.columns([2, 2])
+        with col_filtro_dev1:
+            filtro_situacao_dev = st.radio(
+                "Visualização das Devolutivas:",
+                ["🟡 Apenas Pendentes (A Comprar)", "📋 Todas as Devolutivas (Histórico)"],
+                horizontal=True,
+                key="filtro_sit_dev_radio"
+            )
 
         camp_selecionada_id = st.session_state.get("campanha_selecionada_id")
         
@@ -240,8 +268,11 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     use_container_width=True
                 )
 
+        apenas_pend = "Apenas Pendentes" in filtro_situacao_dev
+        where_dev_sql = "WHERE cd.situacao = 'PENDENTE'" if apenas_pend else ""
+
         with engine.connect() as conn:
-            devolutivas_df = pd.read_sql(text("""
+            devolutivas_df = pd.read_sql(text(f"""
                 SELECT 
                     cd.id,
                     c.codigo_campanha AS "Campanha",
@@ -258,22 +289,25 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 FROM campanha_devolutivas cd
                 JOIN campanhas c ON c.id = cd.campanha_id
                 JOIN campanha_itens ci ON ci.campanha_id = cd.campanha_id AND ci.produto_codigo = cd.produto_codigo
+                {where_dev_sql}
                 ORDER BY cd.data_geracao DESC
             """), conn)
 
         if devolutivas_df.empty:
-            st.success("🎉 Nenhuma pendência de compra em aberto no momento.")
+            if apenas_pend:
+                st.success("🎉 Nenhuma pendência de compra em aberto no momento! Todas as devolutivas foram compradas ou resolvidas.")
+            else:
+                st.info("Nenhuma devolutiva registrada no histórico.")
         else:
             with col_down2:
-                # Download consolidado de todas as devoluções
                 import io
                 out_all_dev = io.BytesIO()
                 with pd.ExcelWriter(out_all_dev, engine="openpyxl") as writer:
-                    devolutivas_df.to_excel(writer, sheet_name="Todas_Devolutivas", index=False)
+                    devolutivas_df.to_excel(writer, sheet_name="Devolutivas_Compras", index=False)
                 st.download_button(
-                    label="📥 Baixar Excel Consolidado de TODAS as Devolutivas",
+                    label="📥 Baixar Planilha das Devolutivas Exibidas",
                     data=out_all_dev.getvalue(),
-                    file_name=f"todas_devolutivas_compras_{date.today().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"devolutivas_compras_{date.today().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
@@ -294,7 +328,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         SET situacao = :st, data_resolucao = NOW(), usuario_resolucao = :user
                         WHERE id = :id
                     """), {"st": novo_st_dev, "user": usuario_atual, "id": sel_dev_id})
-                st.success("Devolutiva atualizada com sucesso!")
+                st.success(f"Devolutiva #{sel_dev_id} atualizada para {novo_st_dev}!")
                 st.rerun()
 
     # =========================================================================
@@ -329,9 +363,9 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
         st.write(f"**Vigência:** {camp['data_inicio'].strftime('%d/%m/%Y')} até {camp['data_fim'].strftime('%d/%m/%Y')} ({dias_camp} dias) | **Criado por:** {camp['usuario_criacao']}")
 
         # Ações na Campanha
-        col_btn1, col_btn2, col_btn3, col_btn4, col_btn5 = st.columns([1.2, 1.2, 1.2, 1.5, 1.5])
+        cols_btns = st.columns([1.2, 1.2, 1.2, 1.5, 1.5, 1.2] if is_admin else [1.2, 1.2, 1.2, 1.5, 1.5])
 
-        with col_btn1:
+        with cols_btns[0]:
             with st.popover("✏️ Editar Capa"):
                 novo_nome = st.text_input("Nome:", value=camp["nome"], key="edit_nome")
                 col_e1, col_e2 = st.columns(2)
@@ -346,7 +380,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     else:
                         st.error(msg)
 
-        with col_btn2:
+        with cols_btns[1]:
             if camp["status"] != "INATIVA":
                 if st.button("⏸️ Inativar", help="Suspende a campanha"):
                     suc, msg = inativar_campanha(engine, camp_id, usuario_atual)
@@ -356,7 +390,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     else:
                         st.error(msg)
 
-        with col_btn3:
+        with cols_btns[2]:
             with st.popover("🔄 Replicar"):
                 rep_nome = st.text_input("Novo Nome da Campanha:", value=f"Cópia de {camp['nome']}")
                 col_r1, col_r2 = st.columns(2)
@@ -371,7 +405,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     else:
                         st.error(msg)
 
-        with col_btn4:
+        with cols_btns[3]:
             # Botão de Download da Devolutiva de Compras
             excel_dev_btn = gerar_excel_devolutiva_compras(engine, camp_id)
             st.download_button(
@@ -382,7 +416,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 help="Baixa a planilha de faltas no CD15 e sugestão de compra"
             )
 
-        with col_btn5:
+        with cols_btns[4]:
             if camp["status"] in ["RASCUNHO", "ATIVA", "PENDENCIA_COMPRAS"]:
                 if st.button("🚀 Enviar para Supply", type="primary", help="Envia os produtos e tipos de exposição ativos para conferência física do Supply"):
                     suc, msg = enviar_campanha_para_supply(engine, camp_id, usuario_atual)
@@ -391,6 +425,19 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         st.rerun()
                     else:
                         st.error(msg)
+
+        if is_admin and len(cols_btns) > 5:
+            with cols_btns[5]:
+                with st.popover("🗑️ Excluir (Admin)"):
+                    st.error(f"⚠️ Atenção: Esta ação excluirá permanentemente a campanha `{camp['codigo_campanha']}` e todos os seus dados e testes.")
+                    if st.button("Confirmar Exclusão Permanente", type="primary", key="btn_del_camp_adm_top"):
+                        suc_d, msg_d = excluir_campanha(engine, camp_id, usuario_atual)
+                        if suc_d:
+                            st.success(msg_d)
+                            st.session_state["campanha_selecionada_id"] = None
+                            st.rerun()
+                        else:
+                            st.error(msg_d)
 
         st.markdown("---")
 

@@ -18,6 +18,8 @@ from services.campanha_service import (
     salvar_fechamento_supply,
     finalizar_avaliacao_campanha,
     carregar_dados_produto_consolidado,
+    expirar_campanhas_vencidas,
+    excluir_campanha,
     LISTA_14_LOJAS
 )
 from services.campanha_calculo import (
@@ -37,6 +39,12 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     st.caption("Verificação de medidas físicas, cubagem por bandeja, confrontação de estoque no CD15 e fechamento de caixas.")
 
     usuario_atual = st.session_state.get("username", "supply")
+    role_str = str(st.session_state.get("role", "")).strip().lower()
+    cargo_str = str(st.session_state.get("cargo", "")).strip().lower()
+    is_admin = role_str == "admin" or "admin" in cargo_str or usuario_atual in ["admin", "administrador"]
+
+    # Atualiza expiração automática
+    expirar_campanhas_vencidas(engine)
 
     # -------------------------------------------------------------------------
     # PAINEL DE FILTROS SUPERIORES DE CONSULTA (SUPPLY)
@@ -69,7 +77,7 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
 
         # 3. Filtro de Status
         with col_sf3:
-            status_opcoes_s = ["ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "ATIVA", "RASCUNHO"]
+            status_opcoes_s = ["ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "ATIVA", "RASCUNHO", "INATIVA"]
             status_default_s = ["ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "ATIVA"]
             status_selecionados_s = st.multiselect(
                 "Status da Campanha:",
@@ -105,8 +113,8 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             c.status,
             c.observacoes,
             COUNT(DISTINCT ci.produto_codigo) as total_skus,
-            SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.volume_final_supply, 0) ELSE 0 END) as total_unidades,
-            SUM(CASE WHEN UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.caixas_transferencia, 0) ELSE 0 END) as total_caixas
+            SUM(CASE WHEN c.status NOT IN ('INATIVA', 'CANCELADA') AND UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.volume_final_supply, 0) ELSE 0 END) as total_unidades,
+            SUM(CASE WHEN c.status NOT IN ('INATIVA', 'CANCELADA') AND UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.caixas_transferencia, 0) ELSE 0 END) as total_caixas
         FROM campanhas c
         JOIN campanha_itens ci ON ci.campanha_id = c.id
         JOIN campanha_lojas cl ON cl.campanha_item_id = ci.id
@@ -123,13 +131,14 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
         st.info("Nenhuma campanha localizada para os filtros selecionados.")
         return
 
-    # Métricas Gerais do Supply
-    tot_skus_s = sum(c.total_skus or 0 for c in campanhas_encontradas)
-    tot_un_s = sum(c.total_unidades or 0 for c in campanhas_encontradas)
-    tot_cx_s = sum(c.total_caixas or 0 for c in campanhas_encontradas)
+    # Métricas Gerais do Supply (Exclui inativas/canceladas)
+    campanhas_ativas_supply = [c for c in campanhas_encontradas if c.status not in ('INATIVA', 'CANCELADA')]
+    tot_skus_s = sum(c.total_skus or 0 for c in campanhas_ativas_supply)
+    tot_un_s = sum(c.total_unidades or 0 for c in campanhas_ativas_supply)
+    tot_cx_s = sum(c.total_caixas or 0 for c in campanhas_ativas_supply)
 
     col_sm1, col_sm2, col_sm3, col_sm4 = st.columns(4)
-    col_sm1.metric("Campanhas Filtradas", len(campanhas_encontradas))
+    col_sm1.metric("Campanhas Ativas / Filtradas", f"{len(campanhas_ativas_supply)} / {len(campanhas_encontradas)}")
     col_sm2.metric("Total de Produtos (SKUs)", tot_skus_s)
     col_sm3.metric("Volume Aprovado (Un)", f"{tot_un_s:,.0f} un")
     col_sm4.metric("Total de Caixas a Transferir", f"{tot_cx_s:,.0f} cx")
@@ -217,7 +226,7 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     lojas_ativas = item_atual.get("lojas_ativas", [])
 
     st.markdown(f"### 📦 `{item_atual['produto_codigo']}` — **{item_atual['descricao_snapshot']}**")
-    st.caption(f"🏢 **Fornecedor:** {item_atual.get('fornecedor') or 'GERAL'} | 🏷️ **Departamento:** {item_atual.get('departamento') or 'N/D'} | 🚚 **Embalagem Transf:** {item_atual['embalagem_transferencia']} un | 📦 **Lojas Ativas Participantes:** {len(lojas_ativas)} de 14")
+    st.caption(f"🏢 **Fornecedor:** {item_atual.get('fornecedor') or 'GERAL'} | 🏷️ **Departamento:** {item_atual.get('departamento') or 'N/D'} | 🚚 **Embalagem Transf:** {item_atual['embalagem_transferencia']} un/cx | 📦 **Lojas Ativas Participantes:** {len(lojas_ativas)} de 14")
 
     # Se todas as lojas forem INATIVA
     if len(lojas_ativas) == 0:
@@ -313,10 +322,10 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             col_res3.metric(f"Capacidade para este SKU (1 de {skus_compartilhados})", f"{capacidade_calculada_sku} unidades", delta=f"Rateio {1/skus_compartilhados*100:.0f}%" if skus_compartilhados > 1 else "Exclusivo")
 
     # -------------------------------------------------------------------------
-    # SEÇÃO 3: ANÁLISE LOJA A LOJA E FECHAMENTO DE VOLUME (SOMENTE LOJAS ATIVAS)
+    # SEÇÃO 3: ANÁLISE LOJA A LOJA E FECHAMENTO EM CAIXAS (SOMENTE LOJAS ATIVAS)
     # -------------------------------------------------------------------------
-    st.subheader(f"🏪 3. Fechamento do Supply por Loja ({len(lojas_ativas)} lojas participantes)")
-    st.caption("Ajuste o volume final por loja participante. Lojas 'INATIVA' foram excluídas automaticamente pois não terão oferta.")
+    st.subheader(f"🏪 3. Fechamento do Supply por Loja em CAIXAS ({len(lojas_ativas)} lojas participantes)")
+    st.caption("💡 **Operação em Caixas Fechadas:** Digite a quantidade sugerida em **Caixas**. O sistema calcula automaticamente o volume em unidades.")
 
     emb_transf = max(1, int(item_atual["embalagem_transferencia"] or 1))
     fechamento_inputs = []
@@ -340,32 +349,40 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
 
                 # Snapshot de dados da loja
                 c_s1, c_s2, c_s3 = st.columns(3)
-                c_s1.caption(f"Estoque Loja: **{float(lj['estoque_loja'] or 0):,.0f}**")
-                c_s2.caption(f"Venda Proj: **{float(lj['venda_projetada'] or 0):.0f}**")
-                c_s3.caption(f"Sug. Compras: **{int(lj['volume_comprador'] or 0)}**")
+                c_s1.caption(f"Estoque Loja: **{float(lj['estoque_loja'] or 0):,.0f} un**")
+                c_s2.caption(f"Venda Proj: **{float(lj['venda_projetada'] or 0):.0f} un**")
+                c_s3.caption(f"Sug. Compras: **{int(lj['volume_comprador'] or 0)} un**")
 
-                # Valor padrão: se volume_final_supply já foi preenchido, usa ele; senão usa a cubagem calculada ou sugestão de compras
-                val_inicial = int(lj.get("volume_final_supply") or 0)
-                if val_inicial == 0:
-                    val_inicial = capacidade_calculada_sku if capacidade_calculada_sku > 0 else int(lj.get("volume_comprador") or 0)
+                # Sugestão inicial em CAIXAS
+                cx_salva = int(lj.get("caixas_transferencia") or 0)
+                if cx_salva > 0:
+                    cx_inicial = cx_salva
+                elif capacidade_calculada_sku > 0:
+                    cx_inicial = max(1, int(round(capacidade_calculada_sku / emb_transf)))
+                elif int(lj.get("volume_comprador") or 0) > 0:
+                    cx_inicial = max(1, int(round(int(lj["volume_comprador"]) / emb_transf)))
+                else:
+                    cx_inicial = 0
 
-                vol_final_supply = st.number_input(
-                    f"Volume Final Supply (Unidades) - Loja {lj_cod}:",
+                cx_final_supply = st.number_input(
+                    f"Caixas de Transferência (cx) — Loja {lj_cod}:",
                     min_value=0,
-                    value=val_inicial,
+                    value=cx_inicial,
                     step=1,
-                    key=f"vol_final_supply_{item_atual['produto_codigo']}_{lj_cod}"
+                    key=f"cx_supply_{item_atual['produto_codigo']}_{lj_cod}",
+                    help=f"Informe a quantidade em caixas fechadas para transferência. Embalagem: {emb_transf} un/cx."
                 )
 
-                cx_calc, vol_efetivo = calcular_caixas_transferencia(vol_final_supply, emb_transf)
-                total_caixas_previstas += cx_calc
+                vol_efetivo = cx_final_supply * emb_transf
+                total_caixas_previstas += cx_final_supply
                 total_unidades_efetivas += vol_efetivo
 
-                st.markdown(f"📦 **Caixas Transferência:** `{cx_calc} cx` (Vol Efetivo: `{vol_efetivo} un`)")
+                st.markdown(f"📦 **Caixas a Transferir:** `{cx_final_supply} cx` ➔ **Volume Efetivo:** `{vol_efetivo:,} unidades` ({cx_final_supply} cx × {emb_transf} un/cx)")
 
                 fechamento_inputs.append({
                     "loja_codigo": lj_cod,
-                    "volume_final_supply": vol_final_supply
+                    "volume_final_supply": vol_efetivo,
+                    "caixas_transferencia": cx_final_supply
                 })
 
     # -------------------------------------------------------------------------
@@ -398,9 +415,15 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     # SEÇÃO 5: SALVAMENTO E EXPORTAÇÕES
     # -------------------------------------------------------------------------
     st.markdown("---")
-    col_act_s1, col_act_s2 = st.columns(2)
+    st.info("""
+    💡 **Entenda a diferença entre as ações:**
+    - **💾 Salvar Avaliação deste Item:** Grava a cubagem e caixas apenas do produto selecionado (`AVALIADO`). Permite salvar o progresso produto a produto.
+    - **✅ Finalizar Avaliação de TODA a Campanha:** Valida se todos os produtos ativos do mix foram avaliados e conclui a campanha, liberando a consulta para as lojas e expedindo as devolutivas de compra para o CD15.
+    """)
 
-    with col_act_s1:
+    cols_actions_s = st.columns([2, 2, 1] if is_admin else [2, 2])
+
+    with cols_actions_s[0]:
         if st.button("💾 Salvar Avaliação deste Item", type="primary", use_container_width=True):
             suc_salv, msg_salv = salvar_fechamento_supply(
                 engine=engine,
@@ -418,7 +441,7 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             else:
                 st.error(msg_salv)
 
-    with col_act_s2:
+    with cols_actions_s[1]:
         if st.button("✅ Finalizar Avaliação de TODA a Campanha", use_container_width=True, help="Conclui a avaliação da campanha e gera o status final"):
             suc_fin, msg_fin = finalizar_avaliacao_campanha(engine, camp_id, usuario_atual)
             if suc_fin:
@@ -427,9 +450,21 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             else:
                 st.error(msg_fin)
 
+    if is_admin and len(cols_actions_s) > 2:
+        with cols_actions_s[2]:
+            with st.popover("🗑️ Excluir (Admin)"):
+                st.error(f"⚠️ Atenção: Esta ação excluirá permanentemente a campanha `{camp['codigo_campanha']}` e todos os seus dados e testes.")
+                if st.button("Confirmar Exclusão", type="primary", key="btn_del_camp_supply_admin"):
+                    suc_d, msg_d = excluir_campanha(engine, camp_id, usuario_atual)
+                    if suc_d:
+                        st.success(msg_d)
+                        st.rerun()
+                    else:
+                        st.error(msg_d)
+
     # Exportações
     st.markdown("---")
-    st.subheader("📑 5. Exportações Operacionais")
+    st.subheader("📑 6. Exportações Operacionais")
     col_exp1, col_exp2 = st.columns(2)
 
     with col_exp1:

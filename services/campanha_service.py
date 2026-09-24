@@ -314,6 +314,33 @@ def inativar_campanha(engine, campanha_id: str, usuario: str) -> Tuple[bool, str
         return False, f"Erro ao inativar campanha: {e}"
 
 
+def excluir_campanha(engine, campanha_id: str, usuario: str) -> Tuple[bool, str]:
+    """
+    Exclui permanentemente uma campanha e todos os seus registros associados
+    (devolutivas, matriz de lojas, itens e historico). Utilizado por Administradores para limpeza de testes.
+    """
+    try:
+        with engine.begin() as conn:
+            # 1. Exclui devolutivas
+            conn.execute(text("DELETE FROM campanha_devolutivas WHERE campanha_id = :cid"), {"cid": campanha_id})
+            # 2. Exclui lojas dos itens
+            conn.execute(text("""
+                DELETE FROM campanha_lojas 
+                WHERE campanha_item_id IN (SELECT id FROM campanha_itens WHERE campanha_id = :cid)
+            """), {"cid": campanha_id})
+            # 3. Exclui itens
+            conn.execute(text("DELETE FROM campanha_itens WHERE campanha_id = :cid"), {"cid": campanha_id})
+            # 4. Exclui historico
+            conn.execute(text("DELETE FROM campanha_historico WHERE campanha_id = :cid"), {"cid": campanha_id})
+            # 5. Exclui capa da campanha
+            conn.execute(text("DELETE FROM campanhas WHERE id = :cid"), {"cid": campanha_id})
+
+        return True, f"Campanha excluída permanentemente pelo administrador {usuario}."
+    except Exception as e:
+        logger.error(f"Erro ao excluir campanha {campanha_id}: {e}")
+        return False, f"Erro ao excluir campanha: {e}"
+
+
 def replicar_campanha(
     engine,
     campanha_origem_id: str,
@@ -1118,8 +1145,14 @@ def salvar_fechamento_supply(
             # 1. Atualiza matriz de lojas
             for fl in fechamento_lojas:
                 lj = str(fl["loja_codigo"]).zfill(3)
-                vol_final = max(0, int(fl.get("volume_final_supply", 0) or 0))
-                cx_transf, vol_transf = calcular_caixas_transferencia(vol_final, emb_transf)
+                if "caixas_transferencia" in fl and fl["caixas_transferencia"] is not None:
+                    cx_transf = max(0, int(fl["caixas_transferencia"]))
+                    vol_transf = cx_transf * emb_transf
+                    vol_final = vol_transf
+                else:
+                    vol_final = max(0, int(fl.get("volume_final_supply", 0) or 0))
+                    cx_transf, vol_transf = calcular_caixas_transferencia(vol_final, emb_transf)
+                
                 total_caixas_necessarias += cx_transf
 
                 conn.execute(text("""
