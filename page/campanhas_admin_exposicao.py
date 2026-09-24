@@ -1,6 +1,6 @@
 """
 page/campanhas_admin_exposicao.py
-Página Administrativa: Cadastro de Tipos de Exposição, Estruturas Físicas, Medidas de Bandejas e Auditoria.
+Página Administrativa: Cadastro e Edição de Tipos de Exposição, Estruturas Físicas, Medidas de Bandejas e Auditoria.
 """
 
 from __future__ import annotations
@@ -8,16 +8,20 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 from typing import List, Dict, Any
+from utils.timezone import now_brazil
 
 
 def show_campanhas_admin_page(engine, base_data_path: str = "data"):
     st.title("⚙️ Administração de Exposições e Auditoria")
-    st.caption("Parametrização dos modelos físicos de gôndolas, bandejas e visualização do histórico de auditoria.")
+    st.caption("Parametrização dos modelos físicos de gôndolas, bandejas, medidas de produtos e histórico de auditoria.")
 
-    tab_tipos, tab_estruturas, tab_bandejas, tab_auditoria = st.tabs([
+    usuario_atual = st.session_state.get("username", "admin")
+
+    tab_tipos, tab_estruturas, tab_bandejas, tab_produtos_dim, tab_auditoria = st.tabs([
         "🏷️ Tipos de Exposição",
         "🏗️ Estruturas Físicas",
         "📐 Dimensões de Bandejas",
+        "📦 Dimensões de Produtos",
         "📜 Histórico de Auditoria"
     ])
 
@@ -25,18 +29,54 @@ def show_campanhas_admin_page(engine, base_data_path: str = "data"):
     # ABA 1: TIPOS DE EXPOSIÇÃO
     # =========================================================================
     with tab_tipos:
-        st.subheader("Tipos de Exposição Cadastrados")
+        st.subheader("Tipos de Exposição")
+        st.caption("Edite os nomes, descrições ou status diretamente na tabela e clique em Salvar.")
 
         with engine.connect() as conn:
             tipos_df = pd.read_sql(text("SELECT id, nome, descricao, ativo FROM tipos_exposicao ORDER BY id"), conn)
 
-        st.dataframe(tipos_df, use_container_width=True, hide_index=True)
+        col_config_tipos = {
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "nome": st.column_config.TextColumn("Nome do Tipo", required=True),
+            "descricao": st.column_config.TextColumn("Descrição"),
+            "ativo": st.column_config.CheckboxColumn("Ativo?", default=True)
+        }
 
+        edited_tipos = st.data_editor(
+            tipos_df,
+            column_config=col_config_tipos,
+            use_container_width=True,
+            hide_index=True,
+            key="editor_tipos_exp"
+        )
+
+        if st.button("💾 Salvar Alterações nos Tipos de Exposição", type="primary", key="btn_salvar_tipos"):
+            try:
+                with engine.begin() as conn:
+                    for _, r in edited_tipos.iterrows():
+                        conn.execute(text("""
+                            UPDATE tipos_exposicao
+                            SET nome = :nome,
+                                descricao = :desc,
+                                ativo = :ativo
+                            WHERE id = :id
+                        """), {
+                            "nome": str(r["nome"]).strip().upper(),
+                            "desc": str(r.get("descricao") or ""),
+                            "ativo": bool(r["ativo"]),
+                            "id": int(r["id"])
+                        })
+                st.success("Tipos de exposição atualizados com sucesso!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao salvar alterações: {e}")
+
+        st.markdown("---")
         with st.expander("➕ Adicionar Novo Tipo de Exposição"):
             with st.form("form_novo_tipo_exp"):
                 novo_nome = st.text_input("Nome do Tipo (ex: CHECKOUT, ILHA REFRIGERADA):").strip().upper()
                 nova_desc = st.text_area("Descrição:")
-                if st.form_submit_button("Salvar Tipo"):
+                if st.form_submit_button("Criar Tipo"):
                     if novo_nome:
                         try:
                             with engine.begin() as conn:
@@ -57,23 +97,61 @@ def show_campanhas_admin_page(engine, base_data_path: str = "data"):
     # =========================================================================
     with tab_estruturas:
         st.subheader("Estruturas Físicas de Exposição")
+        st.caption("Edite os nomes e descrições dos modelos físicos diretamente na tabela.")
 
         with engine.connect() as conn:
             estruturas_df = pd.read_sql(text("""
                 SELECT 
                     e.id, 
-                    t.nome AS "Tipo de Exposição", 
-                    e.nome AS "Nome da Estrutura", 
-                    e.descricao AS "Descrição", 
-                    e.ativo AS "Ativo",
-                    (SELECT COUNT(*) FROM bandejas_exposicao b WHERE b.estrutura_exposicao_id = e.id AND b.ativa = TRUE) AS "Qtd Bandejas"
+                    t.nome AS "tipo_nome", 
+                    e.nome, 
+                    e.descricao, 
+                    e.ativo,
+                    (SELECT COUNT(*) FROM bandejas_exposicao b WHERE b.estrutura_exposicao_id = e.id AND b.ativa = TRUE) AS "qtd_bandejas"
                 FROM estruturas_exposicao e
                 JOIN tipos_exposicao t ON t.id = e.tipo_exposicao_id
                 ORDER BY e.id
             """), conn)
 
-        st.dataframe(estruturas_df, use_container_width=True, hide_index=True)
+        col_config_est = {
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "tipo_nome": st.column_config.TextColumn("Tipo de Exposição", disabled=True),
+            "nome": st.column_config.TextColumn("Nome da Estrutura", required=True),
+            "descricao": st.column_config.TextColumn("Descrição"),
+            "ativo": st.column_config.CheckboxColumn("Ativo?", default=True),
+            "qtd_bandejas": st.column_config.NumberColumn("Qtd Bandejas", disabled=True)
+        }
 
+        edited_est = st.data_editor(
+            estruturas_df,
+            column_config=col_config_est,
+            use_container_width=True,
+            hide_index=True,
+            key="editor_estruturas"
+        )
+
+        if st.button("💾 Salvar Alterações nas Estruturas", type="primary", key="btn_salvar_est"):
+            try:
+                with engine.begin() as conn:
+                    for _, r in edited_est.iterrows():
+                        conn.execute(text("""
+                            UPDATE estruturas_exposicao
+                            SET nome = :nome,
+                                descricao = :desc,
+                                ativo = :ativo
+                            WHERE id = :id
+                        """), {
+                            "nome": str(r["nome"]).strip(),
+                            "desc": str(r.get("descricao") or ""),
+                            "ativo": bool(r["ativo"]),
+                            "id": int(r["id"])
+                        })
+                st.success("Estruturas atualizadas com sucesso!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao salvar: {e}")
+
+        st.markdown("---")
         with st.expander("➕ Cadastrar Nova Estrutura"):
             with engine.connect() as conn:
                 tipos_opts = conn.execute(text("SELECT id, nome FROM tipos_exposicao WHERE ativo = TRUE")).fetchall()
@@ -85,7 +163,7 @@ def show_campanhas_admin_page(engine, base_data_path: str = "data"):
                 desc_est = st.text_area("Descrição:")
                 num_bandejas_iniciais = st.number_input("Criar automaticamente quantas bandejas padrão (150x50x25cm)?", min_value=1, max_value=12, value=6)
 
-                if st.form_submit_button("Salvar Estrutura"):
+                if st.form_submit_button("Criar Estrutura"):
                     if nome_est:
                         try:
                             with engine.begin() as conn:
@@ -109,17 +187,18 @@ def show_campanhas_admin_page(engine, base_data_path: str = "data"):
                         st.warning("Informe o nome da estrutura.")
 
     # =========================================================================
-    # ABA 3: MEDIDAS DE BANDEJAS
+    # ABA 3: MEDIDAS DE BANDEJAS (EDITÁVEL)
     # =========================================================================
     with tab_bandejas:
         st.subheader("Bandejas e Dimensões por Estrutura")
+        st.info("💡 **Edição Direta:** Altere as células de **Largura (cm)**, **Profundidade (cm)**, **Altura Útil (cm)**, **Ordem** ou **Ativa** diretamente na tabela abaixo e clique no botão **Salvar Alterações nas Bandejas**.")
 
         with engine.connect() as conn:
             est_rows = conn.execute(text("SELECT id, nome FROM estruturas_exposicao WHERE ativo = TRUE ORDER BY nome")).fetchall()
         est_map = {r[1]: r[0] for r in est_rows}
 
         if est_map:
-            sel_est_bandeja = st.selectbox("Selecione a Estrutura para Gerenciar Bandejas:", list(est_map.keys()))
+            sel_est_bandeja = st.selectbox("Selecione a Estrutura para Gerenciar Bandejas:", list(est_map.keys()), key="sel_est_adm_bandeja")
             eid_sel = est_map[sel_est_bandeja]
 
             with engine.connect() as conn:
@@ -130,27 +209,186 @@ def show_campanhas_admin_page(engine, base_data_path: str = "data"):
                     ORDER BY ordem, numero_bandeja
                 """), conn, params={"eid": eid_sel})
 
-            st.dataframe(bandejas_df, use_container_width=True, hide_index=True)
+            col_config_bandejas = {
+                "id": st.column_config.NumberColumn("ID", disabled=True),
+                "numero_bandeja": st.column_config.NumberColumn("Nº Bandeja", min_value=1, step=1, required=True),
+                "largura_cm": st.column_config.NumberColumn("Largura (cm)", min_value=1.0, step=0.5, format="%.2f", required=True),
+                "profundidade_cm": st.column_config.NumberColumn("Profundidade (cm)", min_value=1.0, step=0.5, format="%.2f", required=True),
+                "altura_cm": st.column_config.NumberColumn("Altura Útil (cm)", min_value=1.0, step=0.5, format="%.2f", required=True),
+                "ordem": st.column_config.NumberColumn("Ordem", min_value=1, step=1),
+                "ativa": st.column_config.CheckboxColumn("Ativa?", default=True)
+            }
 
-            with st.expander("➕ Adicionar Bandeja nesta Estrutura"):
+            edited_bandejas_df = st.data_editor(
+                bandejas_df,
+                column_config=col_config_bandejas,
+                use_container_width=True,
+                hide_index=True,
+                key=f"editor_bandejas_{eid_sel}"
+            )
+
+            # Botão de Salvamento Direto
+            col_b_save, col_b_info = st.columns([2, 4])
+            with col_b_save:
+                if st.button("💾 Salvar Alterações nas Bandejas", type="primary", key=f"btn_salvar_grid_bandejas_{eid_sel}"):
+                    try:
+                        with engine.begin() as conn:
+                            for _, row in edited_bandejas_df.iterrows():
+                                bid = row.get("id")
+                                n_b = int(row.get("numero_bandeja", 1) or 1)
+                                l_b = float(row.get("largura_cm", 150.0) or 150.0)
+                                p_b = float(row.get("profundidade_cm", 50.0) or 50.0)
+                                a_b = float(row.get("altura_cm", 25.0) or 25.0)
+                                ordem_b = int(row.get("ordem", n_b) or n_b)
+                                ativa_b = bool(row.get("ativa", True))
+
+                                if pd.notna(bid) and int(bid) > 0:
+                                    conn.execute(text("""
+                                        UPDATE bandejas_exposicao
+                                        SET numero_bandeja = :num,
+                                            largura_cm = :larg,
+                                            profundidade_cm = :prof,
+                                            altura_cm = :alt,
+                                            ordem = :ordem,
+                                            ativa = :ativa
+                                        WHERE id = :id AND estrutura_exposicao_id = :eid
+                                    """), {
+                                        "num": n_b,
+                                        "larg": l_b,
+                                        "prof": p_b,
+                                        "alt": a_b,
+                                        "ordem": ordem_b,
+                                        "ativa": ativa_b,
+                                        "id": int(bid),
+                                        "eid": eid_sel
+                                    })
+                        st.success("✅ Medidas e dimensões das bandejas atualizadas com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao atualizar bandejas: {e}")
+
+            st.markdown("---")
+            with st.expander("➕ Adicionar Nova Bandeja nesta Estrutura"):
                 with st.form("form_nova_bandeja"):
                     col_b1, col_b2, col_b3, col_b4 = st.columns(4)
                     num_b = col_b1.number_input("Número da Bandeja:", min_value=1, value=len(bandejas_df) + 1)
-                    larg_b = col_b2.number_input("Largura (cm):", min_value=1.0, value=150.0)
-                    prof_b = col_b3.number_input("Profundidade (cm):", min_value=1.0, value=50.0)
-                    alt_b = col_b4.number_input("Altura Útil (cm):", min_value=1.0, value=25.0)
+                    larg_b = col_b2.number_input("Largura (cm):", min_value=1.0, value=150.0, step=0.5)
+                    prof_b = col_b3.number_input("Profundidade (cm):", min_value=1.0, value=50.0, step=0.5)
+                    alt_b = col_b4.number_input("Altura Útil (cm):", min_value=1.0, value=25.0, step=0.5)
 
                     if st.form_submit_button("Adicionar Bandeja"):
-                        with engine.begin() as conn:
-                            conn.execute(text("""
-                                INSERT INTO bandejas_exposicao (estrutura_exposicao_id, numero_bandeja, largura_cm, profundidade_cm, altura_cm, ordem, ativa)
-                                VALUES (:eid, :num, :larg, :prof, :alt, :num, TRUE)
-                            """), {"eid": eid_sel, "num": num_b, "larg": larg_b, "prof": prof_b, "alt": alt_b})
-                        st.success("Bandeja adicionada com sucesso!")
-                        st.rerun()
+                        try:
+                            with engine.begin() as conn:
+                                conn.execute(text("""
+                                    INSERT INTO bandejas_exposicao (estrutura_exposicao_id, numero_bandeja, largura_cm, profundidade_cm, altura_cm, ordem, ativa)
+                                    VALUES (:eid, :num, :larg, :prof, :alt, :num, TRUE)
+                                """), {"eid": eid_sel, "num": num_b, "larg": larg_b, "prof": prof_b, "alt": alt_b})
+                            st.success("Bandeja adicionada com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao adicionar bandeja: {e}")
 
     # =========================================================================
-    # ABA 4: HISTÓRICO DE AUDITORIA
+    # ABA 4: DIMENSÕES FÍSICAS DOS PRODUTOS (cm)
+    # =========================================================================
+    with tab_produtos_dim:
+        st.subheader("📦 Dimensões Físicas dos Produtos (cm)")
+        st.caption("Consulte e altere as medidas de altura, largura e profundidade em centímetros cadastradas para os SKUs.")
+
+        with engine.connect() as conn:
+            prods_dim_df = pd.read_sql(text("""
+                SELECT 
+                    pd.id,
+                    pd.produto_codigo,
+                    pd.altura_cm,
+                    pd.largura_cm,
+                    pd.profundidade_cm,
+                    pd.data_atualizacao,
+                    pd.usuario_atualizacao
+                FROM produto_dimensoes pd
+                ORDER BY pd.produto_codigo
+            """), conn)
+
+        col_config_pdim = {
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "produto_codigo": st.column_config.NumberColumn("Cód Consinco", disabled=True),
+            "altura_cm": st.column_config.NumberColumn("Altura (cm)", min_value=0.1, step=0.5, format="%.2f", required=True),
+            "largura_cm": st.column_config.NumberColumn("Largura (cm)", min_value=0.1, step=0.5, format="%.2f", required=True),
+            "profundidade_cm": st.column_config.NumberColumn("Profundidade (cm)", min_value=0.1, step=0.5, format="%.2f", required=True),
+            "data_atualizacao": st.column_config.DatetimeColumn("Última Atualização", disabled=True),
+            "usuario_atualizacao": st.column_config.TextColumn("Usuário", disabled=True)
+        }
+
+        if prods_dim_df.empty:
+            st.info("Nenhum produto com dimensões cadastradas no momento.")
+        else:
+            edited_pdim = st.data_editor(
+                prods_dim_df,
+                column_config=col_config_pdim,
+                use_container_width=True,
+                hide_index=True,
+                key="editor_prods_dim"
+            )
+
+            if st.button("💾 Salvar Alterações nas Dimensões dos Produtos", type="primary", key="btn_salvar_pdim"):
+                try:
+                    with engine.begin() as conn:
+                        for _, r in edited_pdim.iterrows():
+                            conn.execute(text("""
+                                UPDATE produto_dimensoes
+                                SET altura_cm = :alt,
+                                    largura_cm = :larg,
+                                    profundidade_cm = :prof,
+                                    data_atualizacao = NOW(),
+                                    usuario_atualizacao = :user
+                                WHERE id = :id
+                            """), {
+                                "alt": float(r["altura_cm"]),
+                                "larg": float(r["largura_cm"]),
+                                "prof": float(r["profundidade_cm"]),
+                                "user": usuario_atual,
+                                "id": int(r["id"])
+                            })
+                    st.success("Dimensões dos produtos atualizadas com sucesso!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao atualizar dimensões: {e}")
+
+        st.markdown("---")
+        with st.expander("➕ Cadastrar Dimensões de um Novo Produto"):
+            with st.form("form_novo_prod_dim"):
+                col_pd1, col_pd2, col_pd3, col_pd4 = st.columns(4)
+                novo_pcod = col_pd1.number_input("Código do Produto (Consinco):", min_value=1, step=1)
+                novo_palt = col_pd2.number_input("Altura (cm):", min_value=0.1, value=10.0, step=0.5)
+                novo_plarg = col_pd3.number_input("Largura (cm):", min_value=0.1, value=10.0, step=0.5)
+                novo_pprof = col_pd4.number_input("Profundidade (cm):", min_value=0.1, value=10.0, step=0.5)
+
+                if st.form_submit_button("Salvar Dimensões"):
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text("""
+                                INSERT INTO produto_dimensoes (produto_codigo, altura_cm, largura_cm, profundidade_cm, data_atualizacao, usuario_atualizacao)
+                                VALUES (:pcod, :alt, :larg, :prof, NOW(), :user)
+                                ON CONFLICT (produto_codigo) DO UPDATE
+                                SET altura_cm = EXCLUDED.altura_cm,
+                                    largura_cm = EXCLUDED.largura_cm,
+                                    profundidade_cm = EXCLUDED.profundidade_cm,
+                                    data_atualizacao = NOW(),
+                                    usuario_atualizacao = EXCLUDED.usuario_atualizacao;
+                            """), {
+                                "pcod": int(novo_pcod),
+                                "alt": float(novo_palt),
+                                "larg": float(novo_plarg),
+                                "prof": float(novo_pprof),
+                                "user": usuario_atual
+                            })
+                        st.success(f"Dimensões do produto {novo_pcod} salvas com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
+
+    # =========================================================================
+    # ABA 5: HISTÓRICO DE AUDITORIA
     # =========================================================================
     with tab_auditoria:
         st.subheader("Histórico Completo de Auditoria de Campanhas")
