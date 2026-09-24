@@ -19,7 +19,7 @@ if __name__ == "__main__":
 
     commit_msg = sys.argv[1]
     pasta_modulo = os.path.dirname(os.path.abspath(__file__))
-    pasta_raiz = os.path.abspath(os.path.join(pasta_modulo, '..'))
+    pasta_raiz = os.path.abspath(os.path.join(pasta_modulo, '..', '..'))
 
     # Commit e push no subdiretório
     run("git add .", cwd=pasta_modulo)
@@ -27,7 +27,6 @@ if __name__ == "__main__":
     run("git push", cwd=pasta_modulo)
 
     # Atualiza submódulo na raiz
-    run(f"git add ProjetoBak_Sincronizador", cwd=pasta_raiz)
-    # Usar aspas duplas para evitar erro de parsing no Windows
+    run("git add Aplicativos/ProjetoBak_Sincronizador", cwd=pasta_raiz)
     run(f'git commit -m "chore(submodule): atualiza ProjetoBak_Sincronizador apos ajuste"', cwd=pasta_raiz)
     run("git push", cwd=pasta_raiz)

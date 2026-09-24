@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import streamlit as st
 from sqlalchemy import text, create_engine, event
 import hashlib

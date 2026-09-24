@@ -1,5 +1,39 @@
 # Histórico de Atualizações - ProjetoBak
 
+## 📅 24/09/2026 - Versão 2.1.0 - MÓDULO DE CAMPANHAS DE EXPOSIÇÃO E ABASTECIMENTO
+
+### 🎯 Gestão de Campanhas (Compras) — `page/campanhas_compras.py`
+- ✅ Criação e edição de campanhas com gerador automático de código único (`CMP-YYYY-XXXXXX`) e status rastreável (`RASCUNHO`, `ATIVA`, `ENVIADA_SUPPLY`, `EM_AVALIACAO_SUPPLY`, `PENDENCIA_COMPRAS`, `FINALIZADA`, `INATIVA`).
+- ✅ Busca inteligente de produtos integrada ao catálogo do ERP Consinco (`bdados/query.parquet`).
+- ✅ Cards analíticos com estoque consolidado de lojas, saldo CD15, venda média diária e projeção de vendas para o período da campanha.
+- ✅ Parametrização da matriz de 14 lojas com seleção de tipo de exposição (Ponta de Gôndola, Meia Ponta, Ilha, Orelha) e sugestão inicial de volume.
+- ✅ Painel de acompanhamento e resolução de Devolutivas de Compras (faltas de estoque no CD15).
+- ✅ Funcionalidade de Replicação de Campanhas com novo período e clonagem estrutural de mix.
+
+### 📦 Avaliação Física e Fechamento Operacional (Supply) — `page/campanhas_supply.py`
+- ✅ Cadastro e persistência de dimensões físicas em centímetros (altura, largura, profundidade) na tabela `produto_dimensoes`.
+- ✅ Motor de cubagem por bandeja e estrutura física com rateio inteligente entre múltiplos SKUs compartilhados.
+- ✅ Grid de fechamento loja a loja com cálculo automatizado de caixas fechadas de transferência (`calcular_caixas_transferencia`).
+- ✅ Confrontação em tempo real com o estoque disponível do CD15 (`QUANTIDADE_DISPONIVEL`), classificação de ruptura (`OK`, `PARCIAL`, `SEM_ESTOQUE_CD`) e geração automática de registros de pendência em `campanha_devolutivas`.
+
+### 🏪 Visualização Operacional da Loja — `page/campanhas_loja.py`
+- ✅ Consulta restrita e segura às campanhas vigentes para a loja vinculada ao usuário logado (`st.session_state["lojas_acesso"]`).
+- ✅ Exibição de produtos, tipo de exposição, volume aprovado e caixas a receber (com dados de custos e CDs estritamente ocultados).
+- ✅ Exportação de documento PDF formatado com checklist para impressão e conferência em prancheta (`ReportLab`).
+- ✅ Exportação de planilha Excel simplificada para consulta do gerente de loja.
+
+### 📑 Motor de Exportações — `services/exportacao_campanha.py`
+- ✅ Geração de Excel Operacional de Transferência (`Supply -> CD`) formatado para digitação no ERP Consinco.
+- ✅ Geração de Excel de Devolutivas de Compras com caixas necessárias, disponíveis e faltantes.
+- ✅ Geração de Excel e PDF para conferência de lojas físicas.
+
+### 🏛️ Arquitetura e Banco de Dados Relacional — `services/campanha_db.py` & `services/campanha_service.py`
+- ✅ Criação idempotente das 10 tabelas relacionais no PostgreSQL: `lojas`, `tipos_exposicao`, `estruturas_exposicao`, `bandejas_exposicao`, `produto_dimensoes`, `campanhas`, `campanha_itens`, `campanha_lojas`, `campanha_devolutivas`, `campanha_historico`.
+- ✅ Rotina de expiração automática de campanhas vencidas e auditoria contínua de mutações em `campanha_historico`.
+- ✅ Cargas iniciais de 14 lojas, CDs, tipos de exposição e estruturas/bandejas padrão.
+
+---
+
 ## 📅 23/02/2026 - Versão 2.0.4 - AJUSTES DE PEDIDO CD E APROVAÇÃO
 
 ### 📦 Pedido por Código (CD)

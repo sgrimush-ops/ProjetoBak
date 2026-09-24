@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import streamlit as st
 import pandas as pd
 import hashlib
@@ -18,6 +21,12 @@ from page.admin_uploads import show_admin_uploads_page
 from page.pedido_cd import show_pedidos_cd_page
 from page.pedido_consumo import show_pedido_consumo_page
 from page.solicitacao_acesso import show_solicitacao_acesso_page
+from page.campanhas_compras import show_campanhas_compras_page
+from page.campanhas_supply import show_campanhas_supply_page
+from page.campanhas_loja import show_campanhas_loja_page
+from page.campanhas_admin_exposicao import show_campanhas_admin_page
+from services.campanha_db import create_campanhas_tables
+from services.campanha_service import expirar_campanhas_vencidas
 
 # =========================================================
 # CONFIGURAÇÕES INICIAIS
@@ -363,6 +372,7 @@ def create_db_tables(engine):
             """))
 
         bootstrap_cargos_catalog(engine)
+        create_campanhas_tables(engine)
     except Exception as e:
         # Melhoria: avisa se houver erro ao criar tabelas
         st.warning(f"Aviso: Falha ao tentar criar tabelas no BD. {e}")
@@ -482,9 +492,10 @@ def main_app():
         login_page(engine)
 
     # --- ÁREA LOGADA ---
-    # Limpa usuários inativos e atualiza o último acesso do usuário atual
+    # Limpa usuários inativos, pedidos antigos e atualiza o último acesso do usuário atual
     cleanup_inactive_users()
     cleanup_old_pedidos()
+    expirar_campanhas_vencidas(engine)
     update_user_last_access(st.session_state["username"])
 
     st.sidebar.success(f"Logado: {st.session_state['username']}")
@@ -526,6 +537,25 @@ def main_app():
         paginas["Administração"] = lambda: show_admin_page(
             engine, BASE_DATA_PATH)
         paginas["Admin Uploads"] = lambda: show_admin_uploads_page(engine, BASE_DATA_PATH)
+
+    # Páginas do Módulo de Campanhas de Exposição
+    role_str = str(st.session_state.get("role", "")).strip().lower()
+    cargo_str = str(st.session_state.get("cargo", "")).strip().lower()
+    is_admin = role_str == "admin"
+    is_compras = is_admin or "compras" in cargo_str or "comprador" in cargo_str
+    is_supply = is_admin or "supply" in cargo_str or "abastecimento" in cargo_str
+
+    if is_compras:
+        paginas["Campanhas (Compras)"] = lambda: show_campanhas_compras_page(engine, BASE_DATA_PATH)
+
+    if is_supply:
+        paginas["Campanhas (Supply)"] = lambda: show_campanhas_supply_page(engine, BASE_DATA_PATH)
+
+    if st.session_state.get("lojas_acesso") or is_admin or is_compras or is_supply:
+        paginas["Campanhas (Loja)"] = lambda: show_campanhas_loja_page(engine, BASE_DATA_PATH)
+
+    if is_admin:
+        paginas["Campanhas (Admin Exposição)"] = lambda: show_campanhas_admin_page(engine, BASE_DATA_PATH)
 
     # Seletor de Página
     page_labels = list(paginas.keys())
