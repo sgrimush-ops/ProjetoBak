@@ -76,7 +76,8 @@ def gerar_excel_devolutiva_compras(engine, campanha_id: str) -> bytes:
             cd.descricao_snapshot AS "Descrição do Produto",
             ci.codigo_familia AS "Cód Família",
             ci.descricao_familia AS "Família",
-            COALESCE(ci.fornecedor, ci.comprador, 'GERAL') AS "Fornecedor",
+            COALESCE(ci.comprador, 'N/D') AS "Comprador",
+            COALESCE(ci.fornecedor, 'SEM FORNECEDOR') AS "Fornecedor",
             cd.caixas_necessarias AS "Caixas Totais Necessárias",
             cd.caixas_cd_disponivel AS "Caixas Disponíveis CD15",
             cd.caixas_falta AS "Caixas Faltantes (Comprar)",
@@ -87,7 +88,7 @@ def gerar_excel_devolutiva_compras(engine, campanha_id: str) -> bytes:
         FROM campanha_devolutivas cd
         JOIN campanha_itens ci ON ci.campanha_id = cd.campanha_id AND ci.produto_codigo = cd.produto_codigo
         WHERE cd.campanha_id = :cid
-        ORDER BY COALESCE(ci.fornecedor, 'GERAL'), ci.codigo_familia, cd.produto_codigo
+        ORDER BY COALESCE(ci.comprador, 'ZZZ'), COALESCE(ci.fornecedor, 'ZZZ'), ci.codigo_familia, cd.produto_codigo
     """)
 
     with engine.connect() as conn:

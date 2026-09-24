@@ -23,6 +23,7 @@ from services.campanha_service import (
     remover_item_campanha,
     enviar_campanha_para_supply,
     obter_itens_campanha_com_detalhes,
+    obter_lista_compradores,
     LISTA_14_LOJAS
 )
 from services.campanha_calculo import calcular_dias_campanha
@@ -97,16 +98,18 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 else:
                     st.error(msg)
 
+    lista_compradores = obter_lista_compradores(engine)
+
     # =========================================================================
     # ABA 3: TODAS AS CAMPANHAS (COM FILTROS AVANÇADOS)
     # =========================================================================
     with tab_existentes:
         st.subheader("📂 Consulta e Gestão de Campanhas")
-        st.caption("Filtre campanhas por loja, período de vigência e status operacional.")
+        st.caption("Filtre campanhas por loja, período de vigência, comprador e status operacional.")
 
         # Painel de Filtros Superiores
         with st.container(border=True):
-            col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+            col_f1, col_f2, col_f3, col_f4 = st.columns([1.5, 1.5, 1.5, 1.5])
 
             with col_f1:
                 opcoes_lojas_c = ["TODAS"] + [l["codigo"] for l in lojas_db]
@@ -124,6 +127,13 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 d_fim_c = col_cd2.date_input("Até:", value=hoje_c + timedelta(days=60), key="d_fim_compras_tab")
 
             with col_f3:
+                sel_comprador_c = st.selectbox(
+                    "Filtrar por Comprador:",
+                    ["TODOS"] + lista_compradores,
+                    key="filtro_comprador_compras_tab"
+                )
+
+            with col_f4:
                 status_opcoes_c = ["RASCUNHO", "ATIVA", "ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "INATIVA", "CANCELADA"]
                 status_default_c = ["RASCUNHO", "ATIVA", "ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA"]
                 status_selecionados_c = st.multiselect(
@@ -148,6 +158,10 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
             where_compras.append("cl.loja_codigo = :loja_filtro")
             params_compras["loja_filtro"] = str(sel_loja_compras).zfill(3)
 
+        if sel_comprador_c != "TODOS":
+            where_compras.append("ci.comprador = :comp_filtro")
+            params_compras["comp_filtro"] = str(sel_comprador_c).strip()
+
         where_sql_compras = " AND ".join(where_compras)
 
         sql_campanhas_compras = text(f"""
@@ -163,6 +177,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 c.observacoes,
                 COUNT(DISTINCT ci.produto_codigo) as total_skus,
                 (SELECT COUNT(*) FROM campanha_devolutivas cd WHERE cd.campanha_id = c.id AND cd.situacao = 'PENDENTE') as total_pendencias,
+                (SELECT STRING_AGG(DISTINCT ci.comprador, ', ') FROM campanha_itens ci WHERE ci.campanha_id = c.id AND ci.comprador IS NOT NULL AND ci.comprador != '' AND ci.comprador != 'None') as compradores,
                 SUM(CASE WHEN c.status NOT IN ('INATIVA', 'CANCELADA') AND UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.volume_final_supply, 0) ELSE 0 END) as total_unidades,
                 SUM(CASE WHEN c.status NOT IN ('INATIVA', 'CANCELADA') AND UPPER(COALESCE(te.nome, '')) != 'INATIVA' THEN COALESCE(cl.caixas_transferencia, 0) ELSE 0 END) as total_caixas
             FROM campanhas c
@@ -202,7 +217,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 status_tag = c.status
 
                 with st.expander(f"🏷️ `{c.codigo_campanha}` — **{c.campanha_nome}** [{status_tag}] | Mix: {c.total_skus} prods | Pendências: {c.total_pendencias}"):
-                    st.write(f"📅 **Vigência:** {d_ini_f} até {d_fim_f} ({dias_f} dias) | **Criado por:** {c.usuario_criacao} em {c.data_criacao.strftime('%d/%m/%Y %H:%M')}")
+                    st.write(f"📅 **Vigência:** {d_ini_f} até {d_fim_f} ({dias_f} dias) | 👤 **Comprador(es):** `{c.compradores or 'N/D'}` | **Criado por:** {c.usuario_criacao} em {c.data_criacao.strftime('%d/%m/%Y %H:%M')}")
                     if c.observacoes:
                         st.caption(f"📌 Obs: {c.observacoes}")
 
@@ -237,7 +252,7 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                                         st.error(msg_d)
 
     # =========================================================================
-    # ABA 4: DEVOLUTIVAS DE COMPRAS (COM DOWNLOAD E FILTRO DE PENDENTES)
+    # ABA 4: DEVOLUTIVAS DE COMPRAS (COM DOWNLOAD E FILTRO DE COMPRADOR)
     # =========================================================================
     with tab_devolutivas:
         st.subheader("📋 Devolutivas de Faltas no CD15 (Necessidade de Compra)")
@@ -250,6 +265,13 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 ["🟡 Apenas Pendentes (A Comprar)", "📋 Todas as Devolutivas (Histórico)"],
                 horizontal=True,
                 key="filtro_sit_dev_radio"
+            )
+
+        with col_filtro_dev2:
+            sel_comprador_dev = st.selectbox(
+                "Filtrar por Comprador:",
+                ["TODOS"] + lista_compradores,
+                key="filtro_comprador_devolutivas_tab"
             )
 
         camp_selecionada_id = st.session_state.get("campanha_selecionada_id")
@@ -268,8 +290,17 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     use_container_width=True
                 )
 
-        apenas_pend = "Apenas Pendentes" in filtro_situacao_dev
-        where_dev_sql = "WHERE cd.situacao = 'PENDENTE'" if apenas_pend else ""
+        where_dev_clauses = []
+        params_dev: Dict[str, Any] = {}
+
+        if "Apenas Pendentes" in filtro_situacao_dev:
+            where_dev_clauses.append("cd.situacao = 'PENDENTE'")
+
+        if sel_comprador_dev != "TODOS":
+            where_dev_clauses.append("ci.comprador = :comp_filtro")
+            params_dev["comp_filtro"] = str(sel_comprador_dev).strip()
+
+        where_dev_sql = ("WHERE " + " AND ".join(where_dev_clauses)) if where_dev_clauses else ""
 
         with engine.connect() as conn:
             devolutivas_df = pd.read_sql(text(f"""
@@ -278,7 +309,8 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     c.codigo_campanha AS "Campanha",
                     cd.produto_codigo AS "Código",
                     cd.descricao_snapshot AS "Descrição",
-                    COALESCE(ci.fornecedor, ci.comprador, 'GERAL') AS "Fornecedor",
+                    COALESCE(ci.comprador, 'N/D') AS "Comprador",
+                    COALESCE(ci.fornecedor, 'SEM FORNECEDOR') AS "Fornecedor",
                     cd.caixas_necessarias AS "Caixas Necessárias",
                     cd.caixas_cd_disponivel AS "Caixas CD15",
                     cd.caixas_falta AS "Caixas a Comprar",
@@ -290,14 +322,14 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 JOIN campanhas c ON c.id = cd.campanha_id
                 JOIN campanha_itens ci ON ci.campanha_id = cd.campanha_id AND ci.produto_codigo = cd.produto_codigo
                 {where_dev_sql}
-                ORDER BY cd.data_geracao DESC
-            """), conn)
+                ORDER BY cd.data_geracao DESC, ci.comprador, ci.fornecedor
+            """), conn, params=params_dev)
 
         if devolutivas_df.empty:
-            if apenas_pend:
-                st.success("🎉 Nenhuma pendência de compra em aberto no momento! Todas as devolutivas foram compradas ou resolvidas.")
+            if "Apenas Pendentes" in filtro_situacao_dev:
+                st.success("🎉 Nenhuma pendência de compra em aberto para os filtros selecionados!")
             else:
-                st.info("Nenhuma devolutiva registrada no histórico.")
+                st.info("Nenhuma devolutiva registrada no histórico para os filtros selecionados.")
         else:
             with col_down2:
                 import io

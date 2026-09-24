@@ -9,7 +9,11 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 from sqlalchemy import text
-from services.campanha_service import expirar_campanhas_vencidas, LISTA_14_LOJAS
+from services.campanha_service import (
+    expirar_campanhas_vencidas,
+    obter_lista_compradores,
+    LISTA_14_LOJAS
+)
 from services.exportacao_campanha import (
     gerar_excel_consulta_loja,
     gerar_pdf_campanha_loja
@@ -24,7 +28,7 @@ def _obter_todas_lojas_db(engine) -> List[Dict[str, str]]:
 
 def show_campanhas_loja_page(engine, base_data_path: str = "data"):
     st.title("🏪 Visão de Campanhas e Exposições de Loja")
-    st.caption("Consulta dos planos de abastecimento e exposição para lojas, com filtros e exportação de PDF/Excel.")
+    st.caption("Consulta dos planos de abastecimento e exposição para lojas, com filtros por comprador, loja e exportação de PDF/Excel.")
 
     # 1. Identificar permissões do usuário
     role_str = str(st.session_state.get("role", "")).strip().lower()
@@ -47,12 +51,14 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
     # Atualiza expiração automática
     expirar_campanhas_vencidas(engine)
 
+    lista_compradores = obter_lista_compradores(engine)
+
     # -------------------------------------------------------------------------
     # PAINEL DE FILTROS SUPERIORES
     # -------------------------------------------------------------------------
     st.markdown("### 🔍 Filtros de Consulta")
     with st.container(border=True):
-        col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+        col_f1, col_f2, col_f3, col_f4 = st.columns([1.5, 1.5, 1.5, 1.5])
 
         # 1. Filtro de Loja
         with col_f1:
@@ -85,8 +91,16 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
             d_ini_filtro = col_d1.date_input("Vigência De:", value=hoje - timedelta(days=15), key="d_ini_loja_filtro")
             d_fim_filtro = col_d2.date_input("Até:", value=hoje + timedelta(days=45), key="d_fim_loja_filtro")
 
-        # 3. Filtro de Status
+        # 3. Filtro por Comprador
         with col_f3:
+            sel_comprador_loja = st.selectbox(
+                "Filtrar por Comprador:",
+                ["TODOS"] + lista_compradores,
+                key="filtro_comprador_loja_page"
+            )
+
+        # 4. Filtro de Status
+        with col_f4:
             status_opcoes = ["FINALIZADA", "ATIVA", "EM_AVALIACAO_SUPPLY", "ENVIADA_SUPPLY", "PENDENCIA_COMPRAS", "INATIVA"]
             status_default = ["FINALIZADA", "ATIVA", "EM_AVALIACAO_SUPPLY"] if not has_global_access else ["FINALIZADA", "ATIVA", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS"]
             status_selecionados = st.multiselect(
@@ -108,6 +122,10 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
     if status_selecionados:
         where_clauses.append("c.status = ANY(:status_list)")
         params["status_list"] = status_selecionados
+
+    if sel_comprador_loja != "TODOS":
+        where_clauses.append("ci.comprador = :comp_filtro")
+        params["comp_filtro"] = str(sel_comprador_loja).strip()
 
     # Filtro de loja no SQL
     if sel_loja != "TODAS":
@@ -194,16 +212,25 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
                 st.caption(f"📌 Observações: {camp.observacoes}")
 
             # -----------------------------------------------------------------
+            # -----------------------------------------------------------------
             # CENÁRIO 1: UMA LOJA ESPECÍFICA SELECIONADA
             # -----------------------------------------------------------------
             if sel_loja != "TODAS":
                 lj = str(sel_loja).zfill(3)
                 loja_label = f"{lj} - {mapa_lojas.get(lj, 'Loja ' + lj)}"
 
-                sql_itens_loja = text("""
+                params_itens_lj = {"cid": cid, "loja": lj}
+                where_comp_lj = ""
+                if sel_comprador_loja != "TODOS":
+                    where_comp_lj = "AND ci.comprador = :comp_filtro"
+                    params_itens_lj["comp_filtro"] = str(sel_comprador_loja).strip()
+
+                sql_itens_loja = text(f"""
                     SELECT 
                         ci.produto_codigo AS "Código",
                         ci.descricao_snapshot AS "Descrição do Produto",
+                        COALESCE(ci.comprador, 'N/D') AS "Comprador",
+                        COALESCE(ci.fornecedor, 'SEM FORNECEDOR') AS "Fornecedor",
                         COALESCE(te.nome, 'Geral') AS "Tipo de Exposição",
                         cl.volume_final_supply AS "Volume Aprovado (Un)",
                         cl.caixas_transferencia AS "Caixas a Receber"
@@ -213,14 +240,15 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
                     WHERE ci.campanha_id = :cid 
                       AND cl.loja_codigo = :loja
                       AND UPPER(COALESCE(te.nome, '')) != 'INATIVA'
+                      {where_comp_lj}
                     ORDER BY ci.produto_codigo
                 """)
 
                 with engine.connect() as conn:
-                    itens_df = pd.read_sql(sql_itens_loja, conn, params={"cid": cid, "loja": lj})
+                    itens_df = pd.read_sql(sql_itens_loja, conn, params=params_itens_lj)
 
                 if itens_df.empty:
-                    st.info(f"Nenhum produto programado para a {loja_label} nesta campanha.")
+                    st.info(f"Nenhum produto programado para a {loja_label} nesta campanha com os filtros selecionados.")
                 else:
                     st.dataframe(itens_df, use_container_width=True, hide_index=True)
 
@@ -257,12 +285,18 @@ def show_campanhas_loja_page(engine, base_data_path: str = "data"):
                     where_lojas_cons = "AND cl.loja_codigo = ANY(:lojas_permitidas)"
                     params_cons["lojas_permitidas"] = [str(lj).zfill(3) for lj in lojas_usuario]
 
+                if sel_comprador_loja != "TODOS":
+                    where_lojas_cons += " AND ci.comprador = :comp_filtro"
+                    params_cons["comp_filtro"] = str(sel_comprador_loja).strip()
+
                 sql_itens_todas = text(f"""
                     SELECT 
                         cl.loja_codigo AS "Loja",
                         l.nome AS "Nome da Loja",
                         ci.produto_codigo AS "Código",
                         ci.descricao_snapshot AS "Descrição do Produto",
+                        COALESCE(ci.comprador, 'N/D') AS "Comprador",
+                        COALESCE(ci.fornecedor, 'SEM FORNECEDOR') AS "Fornecedor",
                         COALESCE(te.nome, 'Geral') AS "Tipo de Exposição",
                         cl.volume_final_supply AS "Volume Aprovado (Un)",
                         cl.caixas_transferencia AS "Caixas a Receber"

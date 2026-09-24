@@ -20,6 +20,7 @@ from services.campanha_service import (
     carregar_dados_produto_consolidado,
     expirar_campanhas_vencidas,
     excluir_campanha,
+    obter_lista_compradores,
     LISTA_14_LOJAS
 )
 from services.campanha_calculo import (
@@ -46,6 +47,8 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     # Atualiza expiração automática
     expirar_campanhas_vencidas(engine)
 
+    lista_compradores = obter_lista_compradores(engine)
+
     # -------------------------------------------------------------------------
     # PAINEL DE FILTROS SUPERIORES DE CONSULTA (SUPPLY)
     # -------------------------------------------------------------------------
@@ -56,7 +59,7 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
 
     st.markdown("### 🔍 Filtros de Consulta")
     with st.container(border=True):
-        col_sf1, col_sf2, col_sf3 = st.columns([2, 2, 2])
+        col_sf1, col_sf2, col_sf3, col_sf4 = st.columns([1.5, 1.5, 1.5, 1.5])
 
         # 1. Filtro de Loja
         with col_sf1:
@@ -75,8 +78,16 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             d_ini_s = col_sd1.date_input("Vigência De:", value=hoje_s - pd.Timedelta(days=30), key="d_ini_supply_filtro")
             d_fim_s = col_sd2.date_input("Até:", value=hoje_s + pd.Timedelta(days=60), key="d_fim_supply_filtro")
 
-        # 3. Filtro de Status
+        # 3. Filtro por Comprador
         with col_sf3:
+            sel_comprador_supply = st.selectbox(
+                "Filtrar por Comprador:",
+                ["TODOS"] + lista_compradores,
+                key="filtro_comprador_supply_page"
+            )
+
+        # 4. Filtro de Status
+        with col_sf4:
             status_opcoes_s = ["ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "ATIVA", "RASCUNHO", "INATIVA"]
             status_default_s = ["ENVIADA_SUPPLY", "EM_AVALIACAO_SUPPLY", "PENDENCIA_COMPRAS", "FINALIZADA", "ATIVA"]
             status_selecionados_s = st.multiselect(
@@ -100,6 +111,10 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     if sel_loja_supply != "TODAS":
         where_supply.append("cl.loja_codigo = :loja_filtro")
         params_supply["loja_filtro"] = str(sel_loja_supply).zfill(3)
+
+    if sel_comprador_supply != "TODOS":
+        where_supply.append("ci.comprador = :comp_filtro")
+        params_supply["comp_filtro"] = str(sel_comprador_supply).strip()
 
     where_sql_supply = " AND ".join(where_supply)
 
@@ -218,7 +233,7 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
         else:
             tag = f"🟡 [PENDENTE ({qtd_atv} lj)]"
 
-        label = f"{tag} {it['produto_codigo']} — {it['descricao_snapshot']} [{it.get('fornecedor') or 'GERAL'}]"
+        label = f"{tag} {it['produto_codigo']} — {it['descricao_snapshot']} [Forn: {it.get('fornecedor') or 'N/D'} | Comp: {it.get('comprador') or 'N/D'}]"
         itens_labels[label] = it
 
     sel_item_label = col_sel_it.selectbox("Selecione o Produto para Analisar / Fechar:", list(itens_labels.keys()), key="sel_item_supply")
@@ -226,7 +241,7 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     lojas_ativas = item_atual.get("lojas_ativas", [])
 
     st.markdown(f"### 📦 `{item_atual['produto_codigo']}` — **{item_atual['descricao_snapshot']}**")
-    st.caption(f"🏢 **Fornecedor:** {item_atual.get('fornecedor') or 'GERAL'} | 🏷️ **Departamento:** {item_atual.get('departamento') or 'N/D'} | 🚚 **Embalagem Transf:** {item_atual['embalagem_transferencia']} un/cx | 📦 **Lojas Ativas Participantes:** {len(lojas_ativas)} de 14")
+    st.caption(f"🏢 **Fornecedor:** {item_atual.get('fornecedor') or 'N/D'} | 👤 **Comprador:** {item_atual.get('comprador') or 'N/D'} | 🏷️ **Departamento:** {item_atual.get('departamento') or 'N/D'} | 🚚 **Embalagem Transf:** {item_atual['embalagem_transferencia']} un/cx | 📦 **Lojas Ativas Participantes:** {len(lojas_ativas)} de 14")
 
     # Se todas as lojas forem INATIVA
     if len(lojas_ativas) == 0:

@@ -4,6 +4,7 @@ Camada de Serviços e Regras de Negócio para Gestão de Campanhas.
 """
 
 from __future__ import annotations
+import os
 import uuid
 import json
 import logging
@@ -109,26 +110,69 @@ def expirar_campanhas_vencidas(engine) -> int:
     return len(expiradas)
 
 
+def obter_lista_compradores(engine) -> List[str]:
+    """
+    Retorna a lista ordenada de todos os compradores únicos presentes no banco e no catálogo parquet.
+    """
+    compradores_set = set()
+    
+    # 1. Busca no banco de dados (campanha_itens)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT DISTINCT comprador 
+                FROM campanha_itens 
+                WHERE comprador IS NOT NULL AND TRIM(comprador) != '' AND TRIM(comprador) != 'None'
+            """)).fetchall()
+            for r in rows:
+                if r[0] and str(r[0]).strip():
+                    compradores_set.add(str(r[0]).strip())
+    except Exception as e:
+        logger.warning(f"Erro ao buscar compradores no banco: {e}")
+
+    # 2. Complementa com o parquet
+    parquet_path = "bdados/query.parquet"
+    if os.path.exists(parquet_path):
+        try:
+            df = pd.read_parquet(parquet_path)
+            df.columns = [str(c).strip() for c in df.columns]
+            if "COMPRADOR" in df.columns:
+                comps_parquet = df["COMPRADOR"].dropna().unique().tolist()
+                for cp in comps_parquet:
+                    cp_str = str(cp).strip()
+                    if cp_str and cp_str not in ["None", "nan", "N/D", "GERAL", ""]:
+                        compradores_set.add(cp_str)
+        except Exception as e:
+            logger.warning(f"Erro ao ler compradores do parquet: {e}")
+
+    return sorted(list(compradores_set))
+
+
 def listar_campanhas(
     engine,
     status_filtro: Optional[List[str]] = None,
-    apenas_vigentes: bool = False
+    apenas_vigentes: bool = False,
+    comprador_filtro: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Retorna a lista de campanhas cadastradas com filtros de status e vigência.
+    Retorna a lista de campanhas cadastradas com filtros de status, vigência e comprador.
     """
     expirar_campanhas_vencidas(engine)
     where_clauses = []
     params: Dict[str, Any] = {}
 
     if status_filtro:
-        where_clauses.append("status = ANY(:status_list)")
+        where_clauses.append("c.status = ANY(:status_list)")
         params["status_list"] = status_filtro
 
     if apenas_vigentes:
         hoje = now_brazil().date()
-        where_clauses.append("data_fim >= :hoje")
+        where_clauses.append("c.data_fim >= :hoje")
         params["hoje"] = hoje
+
+    if comprador_filtro and comprador_filtro not in ["TODOS", "Todos", ""]:
+        where_clauses.append("c.id IN (SELECT ci.campanha_id FROM campanha_itens ci WHERE ci.comprador = :comp_filtro)")
+        params["comp_filtro"] = str(comprador_filtro).strip()
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     sql = text(f"""
@@ -137,7 +181,8 @@ def listar_campanhas(
             c.status, c.usuario_criacao, c.data_criacao, c.usuario_atualizacao, 
             c.data_atualizacao, c.campanha_origem_id, c.observacoes,
             (SELECT COUNT(*) FROM campanha_itens ci WHERE ci.campanha_id = c.id) as total_itens,
-            (SELECT COUNT(*) FROM campanha_devolutivas cd WHERE cd.campanha_id = c.id AND cd.situacao = 'PENDENTE') as total_pendencias
+            (SELECT COUNT(*) FROM campanha_devolutivas cd WHERE cd.campanha_id = c.id AND cd.situacao = 'PENDENTE') as total_pendencias,
+            (SELECT STRING_AGG(DISTINCT ci.comprador, ', ') FROM campanha_itens ci WHERE ci.campanha_id = c.id AND ci.comprador IS NOT NULL AND ci.comprador != '' AND ci.comprador != 'None') as compradores
         FROM campanhas c
         {where_sql}
         ORDER BY c.data_criacao DESC
@@ -522,12 +567,8 @@ def carregar_dados_produto_consolidado(
                             resultado["fornecedor"] = f"{str(cod_forn).strip()} - {str(nome_forn).strip()}"
                     else:
                         resultado["fornecedor"] = str(nome_forn).strip()
-                elif resultado["comprador"]:
-                    resultado["fornecedor"] = f"{resultado['comprador']}"
-                elif resultado["departamento"] and resultado["departamento"] != "GERAL":
-                    resultado["fornecedor"] = f"{resultado['departamento']}"
                 else:
-                    resultado["fornecedor"] = f"PROD {produto_codigo}"
+                    resultado["fornecedor"] = "SEM FORNECEDOR PRINCIPAL"
                 
                 emb_c = primeiro.get("EMBL_COMPRA", 1)
                 emb_t = primeiro.get("EMBL_TRANSFERENCIA", 1)
@@ -1009,7 +1050,7 @@ def sincronizar_metadados_itens_parquet(engine, campanha_id: Optional[str] = Non
     if not os.path.exists(parquet_path):
         return 0
 
-    where_cid = "WHERE (ci.fornecedor IS NULL OR ci.fornecedor IN ('GERAL', 'N/D', '') OR ci.departamento IS NULL OR ci.departamento IN ('N/D', '') OR ci.codigo_familia IS NULL)"
+    where_cid = "WHERE (ci.fornecedor IS NULL OR ci.fornecedor IN ('GERAL', 'N/D', '', 'FORNECEDOR DIVERSOS') OR ci.fornecedor = ci.comprador OR ci.departamento IS NULL OR ci.departamento IN ('N/D', '') OR ci.codigo_familia IS NULL)"
     params = {}
     if campanha_id:
         where_cid += " AND ci.campanha_id = :cid"
@@ -1056,12 +1097,8 @@ def sincronizar_metadados_itens_parquet(engine, campanha_id: Optional[str] = Non
                                 forn = f"{str(cod_forn).strip()} - {str(nome_forn).strip()}"
                         else:
                             forn = str(nome_forn).strip()
-                    elif comp:
-                        forn = f"{comp}"
-                    elif depto and depto != "GERAL":
-                        forn = f"{depto}"
                     else:
-                        forn = f"PROD {pcod}"
+                        forn = "SEM FORNECEDOR PRINCIPAL"
 
                     conn.execute(text("""
                         UPDATE campanha_itens
@@ -1096,7 +1133,7 @@ def obter_itens_campanha_com_detalhes(engine, campanha_id: str) -> List[Dict[str
     sql_itens = text("""
         SELECT 
             ci.id as item_id, ci.produto_codigo, ci.descricao_snapshot,
-            COALESCE(NULLIF(ci.fornecedor, 'GERAL'), NULLIF(ci.comprador, ''), ci.departamento, 'FORNECEDOR DIVERSOS') AS fornecedor,
+            COALESCE(ci.fornecedor, 'SEM FORNECEDOR') AS fornecedor,
             COALESCE(ci.departamento, 'GERAL') AS departamento,
             COALESCE(ci.comprador, '') AS comprador,
             ci.codigo_familia, ci.descricao_familia, COALESCE(ci.total_skus_familia, 1) AS total_skus_familia,
@@ -1105,7 +1142,7 @@ def obter_itens_campanha_com_detalhes(engine, campanha_id: str) -> List[Dict[str
         FROM campanha_itens ci
         LEFT JOIN produto_dimensoes pd ON pd.produto_codigo = ci.produto_codigo
         WHERE ci.campanha_id = :cid
-        ORDER BY COALESCE(NULLIF(ci.fornecedor, 'GERAL'), NULLIF(ci.comprador, ''), ci.departamento, 'FORNECEDOR DIVERSOS'), ci.produto_codigo
+        ORDER BY COALESCE(ci.fornecedor, 'ZZZ'), ci.produto_codigo
     """)
 
     sql_lojas = text("""
