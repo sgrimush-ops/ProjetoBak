@@ -17,6 +17,7 @@ from services.campanha_calculo import (
     calcular_dias_campanha,
     calcular_venda_media_diaria,
     calcular_venda_projetada,
+    calcular_capacidade_exposicao,
     calcular_caixas_transferencia,
     apurar_disponibilidade_cd,
 )
@@ -916,6 +917,250 @@ def enviar_campanha_para_supply(engine, campanha_id: str, usuario: str) -> Tuple
         return True, "Campanha enviada para o Supply com sucesso!"
     except Exception as e:
         return False, f"Erro ao enviar para o Supply: {e}"
+
+
+def reenviar_campanha_para_supply(
+    engine,
+    campanha_id: str,
+    usuario: str,
+    motivo: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Reenvia a campanha para o Supply após alterações de tipo de exposição pelo Compras.
+    Atualiza status para ENVIADA_SUPPLY e registra no histórico.
+    """
+    with engine.connect() as conn:
+        total_itens = conn.execute(text("""
+            SELECT COUNT(*) FROM campanha_itens WHERE campanha_id = :cid
+        """), {"cid": campanha_id}).scalar() or 0
+
+        if total_itens == 0:
+            return False, "A campanha não possui nenhum produto cadastrado."
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE campanhas
+                SET status = 'ENVIADA_SUPPLY',
+                    usuario_atualizacao = :user,
+                    data_atualizacao = NOW()
+                WHERE id = :cid
+            """), {"cid": campanha_id, "user": usuario})
+
+            detalhe_msg = f"Campanha reenviada para o Supply por {usuario}"
+            if motivo:
+                detalhe_msg += f". Motivo: {motivo}"
+
+            registrar_historico(
+                engine,
+                campanha_id=campanha_id,
+                usuario=usuario,
+                acao="REENVIO_SUPPLY",
+                campo="status",
+                valor_novo="ENVIADA_SUPPLY",
+                detalhes=detalhe_msg,
+                conn=conn
+            )
+        return True, "Campanha reenviada para o Supply com sucesso! As alterações de exposição foram notificadas."
+    except Exception as e:
+        return False, f"Erro ao reenviar para o Supply: {e}"
+
+
+def alterar_exposicao_lojas_item(
+    engine,
+    campanha_id: str,
+    item_id: int,
+    dados_lojas: List[Dict[str, Any]],
+    usuario: str,
+    propagar_familia: bool = False
+) -> Tuple[bool, str]:
+    """
+    Atualiza a parametrização de tipos de exposição e volumes sugeridos por loja para um item já cadastrado.
+    Se propagar_familia for True e o item possuir codigo_familia, atualiza também todos os outros
+    itens da mesma família cadastrados nesta campanha.
+    """
+    try:
+        with engine.begin() as conn:
+            # 1. Busca dados do item
+            item = conn.execute(text("""
+                SELECT id, produto_codigo, descricao_snapshot, codigo_familia, descricao_familia, total_skus_familia
+                FROM campanha_itens
+                WHERE id = :iid AND campanha_id = :cid
+            """), {"iid": item_id, "cid": campanha_id}).fetchone()
+
+            if not item:
+                return False, "Item não encontrado na campanha."
+
+            itens_afetados_ids = [item_id]
+            desc_info = f"Produto {item.produto_codigo}"
+
+            if propagar_familia and item.codigo_familia:
+                irmaos = conn.execute(text("""
+                    SELECT id, produto_codigo
+                    FROM campanha_itens
+                    WHERE campanha_id = :cid AND codigo_familia = :cod_fam
+                """), {"cid": campanha_id, "cod_fam": item.codigo_familia}).fetchall()
+                itens_afetados_ids = [r.id for r in irmaos]
+                desc_info = f"Família {item.codigo_familia} ({len(itens_afetados_ids)} SKUs)"
+
+            # 2. Atualiza a matriz de lojas para todos os itens afetados
+            for iid in itens_afetados_ids:
+                for d in dados_lojas:
+                    lj = str(d["loja_codigo"]).zfill(3)
+                    tipo_exp_id = d.get("tipo_exposicao_id")
+                    vol_comp = d.get("volume_comprador", 0)
+
+                    conn.execute(text("""
+                        UPDATE campanha_lojas
+                        SET tipo_exposicao_id = :tipo_exp,
+                            volume_comprador = :vol_c,
+                            atualizado_em = NOW()
+                        WHERE campanha_item_id = :iid AND loja_codigo = :loja
+                    """), {
+                        "tipo_exp": tipo_exp_id,
+                        "vol_c": vol_comp,
+                        "iid": iid,
+                        "loja": lj
+                    })
+
+            # 3. Registra auditoria
+            registrar_historico(
+                engine,
+                campanha_id=campanha_id,
+                usuario=usuario,
+                acao="ALTERAR_EXPOSICAO_LOJAS",
+                detalhes=f"Tipos de exposição atualizados para {desc_info} por {usuario}",
+                conn=conn
+            )
+
+        return True, f"Tipos de exposição atualizados com sucesso para {desc_info}! Lembre-se de clicar em '🔄 Reenviar para o Supply' se a campanha já estava em avaliação."
+    except Exception as e:
+        logger.error(f"Erro ao alterar tipos de exposição do item: {e}")
+        return False, f"Erro ao atualizar exposição: {e}"
+
+
+def atualizar_status_devolutiva_familia(
+    engine,
+    campanha_id: Optional[str],
+    novo_status: str,
+    usuario: str,
+    codigo_familia: Optional[int] = None,
+    produto_codigo: Optional[int] = None,
+    devolutiva_ids: Optional[List[int]] = None
+) -> Tuple[bool, str]:
+    """
+    Atualiza o status de devolutivas agrupadas por família de produtos, código de produto ou lista de IDs.
+    """
+    try:
+        where_clauses = []
+        params: Dict[str, Any] = {
+            "st": novo_status,
+            "user": usuario
+        }
+
+        if devolutiva_ids:
+            where_clauses.append("cd.id = ANY(:dev_ids)")
+            params["dev_ids"] = devolutiva_ids
+        elif codigo_familia and campanha_id:
+            where_clauses.append("""
+                cd.campanha_id = :cid AND cd.produto_codigo IN (
+                    SELECT ci.produto_codigo FROM campanha_itens ci 
+                    WHERE ci.campanha_id = :cid AND ci.codigo_familia = :cod_fam
+                )
+            """)
+            params["cid"] = campanha_id
+            params["cod_fam"] = int(codigo_familia)
+        elif produto_codigo and campanha_id:
+            where_clauses.append("cd.campanha_id = :cid AND cd.produto_codigo = :pcod")
+            params["cid"] = campanha_id
+            params["pcod"] = int(produto_codigo)
+        elif produto_codigo:
+            where_clauses.append("cd.produto_codigo = :pcod")
+            params["pcod"] = int(produto_codigo)
+        else:
+            return False, "Nenhum critério de seleção fornecido para atualização de devolutiva."
+
+        where_sql = " AND ".join(where_clauses)
+        update_sql = text(f"""
+            UPDATE campanha_devolutivas cd
+            SET situacao = :st,
+                data_resolucao = NOW(),
+                usuario_resolucao = :user
+            WHERE {where_sql}
+            RETURNING cd.id;
+        """)
+
+        with engine.begin() as conn:
+            res = conn.execute(update_sql, params).fetchall()
+            ids_atualizados = [r[0] for r in res]
+
+            if campanha_id:
+                registrar_historico(
+                    engine,
+                    campanha_id=campanha_id,
+                    usuario=usuario,
+                    acao="ATUALIZAR_DEVOLUTIVA_FAMILIA",
+                    detalhes=f"{len(ids_atualizados)} devolutiva(s) atualizada(s) para status '{novo_status}' por {usuario}",
+                    conn=conn
+                )
+
+        if not ids_atualizados:
+            return False, "Nenhuma devolutiva correspondente localizada para atualização."
+
+        return True, f"{len(ids_atualizados)} devolutiva(s) atualizada(s) com sucesso para '{novo_status}'!"
+    except Exception as e:
+        logger.error(f"Erro ao atualizar status de devolutiva por família: {e}")
+        return False, f"Erro ao atualizar devolutivas: {e}"
+
+
+def obter_mapa_capacidade_por_tipo_exposicao(
+    engine,
+    produto_dimensoes: Dict[str, float],
+    embl_transferencia: int = 1,
+    total_skus: int = 1
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Calcula a capacidade em unidades e em caixas para todos os tipos de exposição físicos cadastrados.
+    Retorna dicionário indexado por tipo_exposicao_id com os valores totais da estrutura e rateados por SKU.
+    """
+    estruturas = obter_estruturas_e_bandejas(engine)
+    mapa: Dict[int, Dict[str, Any]] = {}
+    emb_transf = max(1, int(embl_transferencia or 1))
+    skus_n = max(1, int(total_skus or 1))
+
+    for est in estruturas:
+        tipo_id = est["tipo_exposicao_id"]
+        # Se já tivermos uma estrutura para esse tipo, usamos a primeira ativa
+        if tipo_id in mapa:
+            continue
+
+        bandejas = est.get("bandejas", [])
+        if not bandejas:
+            continue
+
+        cap_total_un = calcular_capacidade_exposicao(bandejas, produto_dimensoes, total_skus=1)
+        cap_sku_un = calcular_capacidade_exposicao(bandejas, produto_dimensoes, total_skus=skus_n)
+
+        cap_total_cx = int(cap_total_un // emb_transf)
+        cap_sku_cx = int(cap_sku_un // emb_transf)
+        if cap_sku_un > 0 and cap_sku_cx == 0:
+            cap_sku_cx = 1
+
+        mapa[tipo_id] = {
+            "tipo_id": tipo_id,
+            "tipo_nome": est["tipo_nome"],
+            "estrutura_id": est["estrutura_id"],
+            "estrutura_nome": est["estrutura_nome"],
+            "bandejas_count": len(bandejas),
+            "capacidade_total_un": cap_total_un,
+            "capacidade_total_cx": cap_total_cx,
+            "capacidade_sku_un": cap_sku_un,
+            "capacidade_sku_cx": cap_sku_cx,
+            "total_skus": skus_n,
+            "embalagem_transferencia": emb_transf
+        }
+
+    return mapa
 
 
 # =============================================================================

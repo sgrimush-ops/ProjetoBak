@@ -15,6 +15,7 @@ from services.campanha_service import (
     obter_itens_campanha_com_detalhes,
     salvar_dimensoes_produto,
     obter_estruturas_e_bandejas,
+    obter_mapa_capacidade_por_tipo_exposicao,
     salvar_fechamento_supply,
     finalizar_avaliacao_campanha,
     carregar_dados_produto_consolidado,
@@ -307,52 +308,102 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
     # -------------------------------------------------------------------------
     st.subheader("🗄️ 2. Parametrização e Simulação de Cubagem por Bandeja")
     
+    emb_transf = max(1, int(item_atual["embalagem_transferencia"] or 1))
     tot_skus_fam_item = int(item_atual.get("total_skus_familia") or 1)
     if item_atual.get("codigo_familia") or tot_skus_fam_item > 1:
         st.info(f"👨‍👩‍👧‍👦 **Família de Exposição: `{item_atual.get('codigo_familia')}` — {item_atual.get('descricao_familia', 'N/D')}** | Este produto está parametrizado para compartilhar a estrutura física entre **{tot_skus_fam_item} SKUs**. A cubagem abaixo divide o espaço total proporcionalmente.")
 
     estruturas = obter_estruturas_e_bandejas(engine)
+    dim_prod_dict = {"altura_cm": alt_p, "largura_cm": larg_p, "profundidade_cm": prof_p}
+
     if not estruturas:
         st.warning("Nenhuma estrutura física com bandejas cadastrada. Cadastre em Administração de Exposição.")
         capacidade_calculada_sku = 0
         estrutura_selecionada_id = None
+        mapa_capacidades = {}
     else:
         est_dict = {f"{e['tipo_nome']} — {e['estrutura_nome']} ({len(e['bandejas'])} bandejas)": e for e in estruturas}
         col_c1, col_c2 = st.columns([2, 1])
-        sel_est_label = col_c1.selectbox("Modelo Físico da Exposição:", list(est_dict.keys()), key="sel_est_cubagem")
+        sel_est_label = col_c1.selectbox("Modelo Físico da Exposição Simulado:", list(est_dict.keys()), key="sel_est_cubagem")
         est_obj = est_dict[sel_est_label]
         estrutura_selecionada_id = est_obj["estrutura_id"]
 
         skus_compartilhados = col_c2.number_input(
             "Nº de SKUs Compartilhados:",
             min_value=1,
-            max_value=max(20, tot_skus_fam_item),
+            max_value=max(30, tot_skus_fam_item),
             value=tot_skus_fam_item,
             step=1,
             help="Total de SKUs/sabores que dividem o mesmo móvel físico (ex: 5 sabores de Tang na mesma Ilha)."
         )
 
-        dim_prod_dict = {"altura_cm": alt_p, "largura_cm": larg_p, "profundidade_cm": prof_p}
+        # Mapa de capacidade para todos os tipos de exposição físicos
+        mapa_capacidades = obter_mapa_capacidade_por_tipo_exposicao(
+            engine=engine,
+            produto_dimensoes=dim_prod_dict,
+            embl_transferencia=emb_transf,
+            total_skus=skus_compartilhados
+        )
+
+        # Capacidade Total da Estrutura Física (100% do móvel)
+        cap_total_estrutura_un = calcular_capacidade_exposicao(
+            bandejas=est_obj["bandejas"],
+            produto_dimensoes=dim_prod_dict,
+            total_skus=1
+        )
+        cap_total_estrutura_cx = int(cap_total_estrutura_un // emb_transf)
+
+        # Capacidade Rateada por SKU (1 de N)
         capacidade_calculada_sku = calcular_capacidade_exposicao(
             bandejas=est_obj["bandejas"],
             produto_dimensoes=dim_prod_dict,
             total_skus=skus_compartilhados
         )
+        cap_sku_cx = int(capacidade_calculada_sku // emb_transf)
+        if capacidade_calculada_sku > 0 and cap_sku_cx == 0:
+            cap_sku_cx = 1
 
-        # Card de resultado da cubagem
+        # Card de resultado da cubagem com UNIDADES e CAIXAS
         with st.container(border=True):
-            col_res1, col_res2, col_res3 = st.columns(3)
+            col_res1, col_res2, col_res3, col_res4 = st.columns([1.2, 0.8, 1.3, 1.3])
             col_res1.metric("Estrutura Física", est_obj["estrutura_nome"])
-            col_res2.metric("Total de Bandejas", f"{len(est_obj['bandejas'])} níveis")
-            col_res3.metric(f"Capacidade para este SKU (1 de {skus_compartilhados})", f"{capacidade_calculada_sku} unidades", delta=f"Rateio {1/skus_compartilhados*100:.0f}%" if skus_compartilhados > 1 else "Exclusivo")
+            col_res2.metric("Bandejas", f"{len(est_obj['bandejas'])} níveis")
+            col_res3.metric(
+                "Capacidade Total do Móvel",
+                f"{cap_total_estrutura_cx:,} cx",
+                f"{cap_total_estrutura_un:,} un (Móvel Inteiro)"
+            )
+            col_res4.metric(
+                f"Capacidade por SKU (1 de {skus_compartilhados})",
+                f"{cap_sku_cx:,} cx",
+                f"{capacidade_calculada_sku:,} un (Rateio {1/skus_compartilhados*100:.0f}%)" if skus_compartilhados > 1 else f"{capacidade_calculada_sku:,} un (Exclusivo)",
+                delta="Rateio Família" if skus_compartilhados > 1 else "Exclusivo"
+            )
+
+        # Tabela resumo comparativa dos tipos de exposição
+        if mapa_capacidades:
+            with st.expander("📊 Ver Comparativo de Capacidade em Todos os Tipos de Exposição (Ilha, Ponta, Meia Ponta, Orelha)"):
+                df_comp_tipos = pd.DataFrame([
+                    {
+                        "Tipo de Exposição": info["tipo_nome"],
+                        "Estrutura Padrão": info["estrutura_nome"],
+                        "Bandejas": f"{info['bandejas_count']} níveis",
+                        "Capacidade Total Móvel (cx)": f"{info['capacidade_total_cx']:,} cx",
+                        "Capacidade Total Móvel (un)": f"{info['capacidade_total_un']:,} un",
+                        f"Sugestão por SKU ({skus_compartilhados} sabores) [cx]": f"{info['capacidade_sku_cx']:,} cx",
+                        f"Sugestão por SKU ({skus_compartilhados} sabores) [un]": f"{info['capacidade_sku_un']:,} un",
+                    }
+                    for tid, info in mapa_capacidades.items()
+                    if info["tipo_nome"] != "INATIVA"
+                ])
+                st.dataframe(df_comp_tipos, use_container_width=True, hide_index=True)
 
     # -------------------------------------------------------------------------
     # SEÇÃO 3: ANÁLISE LOJA A LOJA E FECHAMENTO EM CAIXAS (SOMENTE LOJAS ATIVAS)
     # -------------------------------------------------------------------------
     st.subheader(f"🏪 3. Fechamento do Supply por Loja em CAIXAS ({len(lojas_ativas)} lojas participantes)")
-    st.caption("💡 **Operação em Caixas Fechadas:** Digite a quantidade sugerida em **Caixas**. O sistema calcula automaticamente o volume em unidades.")
+    st.caption("💡 **Operação em Caixas Fechadas:** Digite a quantidade sugerida em **Caixas**. A sugestão do sistema é calculada automaticamente com base no **tipo de exposição de cada loja** e dividida proporcionalmente pela quantidade de SKUs da família.")
 
-    emb_transf = max(1, int(item_atual["embalagem_transferencia"] or 1))
     fechamento_inputs = []
     total_caixas_previstas = 0
     total_unidades_efetivas = 0
@@ -366,11 +417,28 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
             with st.container(border=True):
                 lj_cod = lj["loja_codigo"]
                 lj_nome = lj["loja_nome"]
+                tipo_exp_id_lj = lj.get("tipo_exposicao_id")
                 tipo_exp_definido = lj.get("tipo_exposicao_nome") or "Exposição Geral"
                 
+                # Identifica capacidade específica para a estrutura/tipo desta loja
+                cap_info_tipo = mapa_capacidades.get(tipo_exp_id_lj, {})
+                sug_cx_cubagem = cap_info_tipo.get("capacidade_sku_cx")
+                sug_un_cubagem = cap_info_tipo.get("capacidade_sku_un")
+                cap_tot_cx_tipo = cap_info_tipo.get("capacidade_total_cx")
+                cap_tot_un_tipo = cap_info_tipo.get("capacidade_total_un")
+
+                if sug_cx_cubagem is None:
+                    sug_cx_cubagem = cap_sku_cx if 'cap_sku_cx' in locals() else 0
+                    sug_un_cubagem = capacidade_calculada_sku if 'capacidade_calculada_sku' in locals() else 0
+                    cap_tot_cx_tipo = cap_total_estrutura_cx if 'cap_total_estrutura_cx' in locals() else 0
+                    cap_tot_un_tipo = cap_total_estrutura_un if 'cap_total_estrutura_un' in locals() else 0
+
                 # Cabeçalho da loja com tipo de exposição SOMENTE LEITURA (definido pelo compras)
                 st.write(f"🏬 **{lj_cod} - {lj_nome}**")
                 st.markdown(f"🏷️ **Exposição Definida pelo Compras:** <span style='background-color:#0284c7;color:white;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold;'>{tipo_exp_definido}</span>", unsafe_allow_html=True)
+                
+                if cap_tot_cx_tipo and cap_tot_cx_tipo > 0:
+                    st.caption(f"📐 **Cubagem do Tipo ({tipo_exp_definido}):** {cap_tot_cx_tipo} cx no móvel ({cap_tot_un_tipo:,} un) ➔ **Sugestão p/ este Sabor:** `{sug_cx_cubagem} cx` ({sug_un_cubagem:,} un) *(Rateio em {tot_skus_fam_item} SKUs)*")
 
                 # Snapshot de dados da loja
                 c_s1, c_s2, c_s3 = st.columns(3)
@@ -378,12 +446,12 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
                 c_s2.caption(f"Venda Proj: **{float(lj['venda_projetada'] or 0):.0f} un**")
                 c_s3.caption(f"Sug. Compras: **{int(lj['volume_comprador'] or 0)} un**")
 
-                # Sugestão inicial em CAIXAS
+                # Sugestão inicial em CAIXAS (acompanha a cubagem do tipo de exposição da loja rateado pela família)
                 cx_salva = int(lj.get("caixas_transferencia") or 0)
                 if cx_salva > 0:
                     cx_inicial = cx_salva
-                elif capacidade_calculada_sku > 0:
-                    cx_inicial = max(1, int(round(capacidade_calculada_sku / emb_transf)))
+                elif sug_cx_cubagem and sug_cx_cubagem > 0:
+                    cx_inicial = sug_cx_cubagem
                 elif int(lj.get("volume_comprador") or 0) > 0:
                     cx_inicial = max(1, int(round(int(lj["volume_comprador"]) / emb_transf)))
                 else:

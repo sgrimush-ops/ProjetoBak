@@ -22,6 +22,9 @@ from services.campanha_service import (
     salvar_familia_campanha_compras,
     remover_item_campanha,
     enviar_campanha_para_supply,
+    reenviar_campanha_para_supply,
+    alterar_exposicao_lojas_item,
+    atualizar_status_devolutiva_familia,
     obter_itens_campanha_com_detalhes,
     obter_lista_compradores,
     LISTA_14_LOJAS
@@ -306,7 +309,10 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
             devolutivas_df = pd.read_sql(text(f"""
                 SELECT 
                     cd.id,
+                    c.id AS campanha_id,
                     c.codigo_campanha AS "Campanha",
+                    ci.codigo_familia AS "Cód Família",
+                    COALESCE(ci.descricao_familia, ci.descricao_snapshot) AS "Família / Grupo",
                     cd.produto_codigo AS "Código",
                     cd.descricao_snapshot AS "Descrição",
                     COALESCE(ci.comprador, 'N/D') AS "Comprador",
@@ -345,23 +351,92 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 )
 
             st.markdown("---")
-            st.dataframe(devolutivas_df, use_container_width=True)
+            # Tabela de exibição formatada
+            cols_exibicao = [c for c in devolutivas_df.columns if c not in ["campanha_id"]]
+            st.dataframe(devolutivas_df[cols_exibicao], use_container_width=True, hide_index=True)
 
-            # Opção de resolver pendência
+            # Opção de resolver pendência agrupada por FAMÍLIA DE PRODUTOS
             st.markdown("---")
-            st.markdown("#### Atualizar Status da Devolutiva")
-            col_d_id, col_d_st, col_d_btn = st.columns([2, 2, 1])
-            sel_dev_id = col_d_id.selectbox("Selecione o ID da Devolutiva:", devolutivas_df["id"].tolist())
-            novo_st_dev = col_d_st.selectbox("Novo Status:", ["PENDENTE", "COMPRADO", "RESOLVIDO"])
-            if col_d_btn.button("Atualizar Status", key="btn_up_dev"):
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        UPDATE campanha_devolutivas 
-                        SET situacao = :st, data_resolucao = NOW(), usuario_resolucao = :user
-                        WHERE id = :id
-                    """), {"st": novo_st_dev, "user": usuario_atual, "id": sel_dev_id})
-                st.success(f"Devolutiva #{sel_dev_id} atualizada para {novo_st_dev}!")
-                st.rerun()
+            st.markdown("#### 👨‍👩‍👧‍👦 Atualizar Status por Família de Produtos")
+            st.caption("A manutenção de compras é realizada por Família de Produtos, atualizando todas as pendências dos SKUs irmãos em lote.")
+
+            opcoes_familia_dict = {}
+            for _, row in devolutivas_df.iterrows():
+                cid = row["campanha_id"]
+                camp_cod = row["Campanha"]
+                cod_fam = row["Cód Família"]
+                prod_cod = row["Código"]
+                desc = row["Descrição"]
+                fam_desc = row["Família / Grupo"]
+                status_atual = row["Status"]
+                cx_falta = int(row["Caixas a Comprar"] or 0)
+                
+                if pd.notna(cod_fam) and str(cod_fam).isdigit() and int(cod_fam) > 0:
+                    chave = f"FAM_{cid}_{int(cod_fam)}"
+                    if chave not in opcoes_familia_dict:
+                        opcoes_familia_dict[chave] = {
+                            "campanha_id": cid,
+                            "codigo_familia": int(cod_fam),
+                            "produto_codigo": None,
+                            "tipo": "FAMILIA",
+                            "nome": f"👨‍👩‍👧‍👦 Família {int(cod_fam)} — {fam_desc} [{camp_cod}]",
+                            "itens_count": 0,
+                            "total_cx": 0,
+                            "ids": []
+                        }
+                    opcoes_familia_dict[chave]["itens_count"] += 1
+                    opcoes_familia_dict[chave]["total_cx"] += cx_falta
+                    opcoes_familia_dict[chave]["ids"].append(row["id"])
+                else:
+                    chave = f"PROD_{cid}_{prod_cod}"
+                    if chave not in opcoes_familia_dict:
+                        opcoes_familia_dict[chave] = {
+                            "campanha_id": cid,
+                            "codigo_familia": None,
+                            "produto_codigo": prod_cod,
+                            "tipo": "PRODUTO",
+                            "nome": f"📦 Produto {prod_cod} — {desc} [{camp_cod}]",
+                            "itens_count": 0,
+                            "total_cx": 0,
+                            "ids": []
+                        }
+                    opcoes_familia_dict[chave]["itens_count"] += 1
+                    opcoes_familia_dict[chave]["total_cx"] += cx_falta
+                    opcoes_familia_dict[chave]["ids"].append(row["id"])
+
+            labels_fam_map = {}
+            for k, val in opcoes_familia_dict.items():
+                lbl = f"{val['nome']} — {val['itens_count']} item(ns) | {val['total_cx']} cx a comprar"
+                labels_fam_map[lbl] = val
+
+            if labels_fam_map:
+                col_d_fam, col_d_st, col_d_btn = st.columns([2.8, 1.4, 1.4])
+                sel_fam_label = col_d_fam.selectbox(
+                    "Selecione a Família / Grupo da Devolutiva:",
+                    list(labels_fam_map.keys()),
+                    key="sel_dev_fam_box"
+                )
+                fam_selecionada = labels_fam_map[sel_fam_label]
+                novo_st_dev = col_d_st.selectbox("Novo Status:", ["COMPRADO", "RESOLVIDO", "PENDENTE"], key="sel_novo_st_dev")
+                
+                with col_d_btn:
+                    st.write("")
+                    st.write("")
+                    if st.button("💾 Atualizar Família", key="btn_up_dev_fam", type="primary", use_container_width=True):
+                        suc_dev, msg_dev = atualizar_status_devolutiva_familia(
+                            engine=engine,
+                            campanha_id=fam_selecionada["campanha_id"],
+                            novo_status=novo_st_dev,
+                            usuario=usuario_atual,
+                            codigo_familia=fam_selecionada["codigo_familia"],
+                            produto_codigo=fam_selecionada["produto_codigo"],
+                            devolutiva_ids=fam_selecionada["ids"]
+                        )
+                        if suc_dev:
+                            st.success(msg_dev)
+                            st.rerun()
+                        else:
+                            st.error(msg_dev)
 
     # =========================================================================
     # ABA 1: CAMPANHA SELECIONADA
@@ -449,9 +524,17 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
             )
 
         with cols_btns[4]:
-            if camp["status"] in ["RASCUNHO", "ATIVA", "PENDENCIA_COMPRAS"]:
+            if camp["status"] in ["RASCUNHO", "ATIVA"]:
                 if st.button("🚀 Enviar para Supply", type="primary", help="Envia os produtos e tipos de exposição ativos para conferência física do Supply"):
                     suc, msg = enviar_campanha_para_supply(engine, camp_id, usuario_atual)
+                    if suc:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            else:
+                if st.button("🔄 Reenviar para o Supply", type="primary", help="Reenvia a campanha para o Supply após alterações ou renegociações de exposição"):
+                    suc, msg = reenviar_campanha_para_supply(engine, camp_id, usuario_atual)
                     if suc:
                         st.success(msg)
                         st.rerun()
@@ -481,13 +564,17 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
         itens_campanha = obter_itens_campanha_com_detalhes(engine, camp_id)
 
         # Seção para Adicionar / Buscar Novo Produto no Parquet
-        with st.expander("🔍 Adicionar Novo Produto ao Mix (Busca no ERP Consinco)", expanded=(len(itens_campanha) == 0)):
+        with st.expander("🔍 Adicionar Novo Produto ao Mix (Busca por Código, Descrição ou Família)", expanded=(len(itens_campanha) == 0)):
             col_b1, col_b2 = st.columns([3, 1])
-            termo_busca = col_b1.text_input("Digite o Código Consinco ou Descrição do Produto:", key="busca_prod_termo")
+            termo_busca = col_b1.text_input(
+                "Digite o Código Consinco, Descrição ou Família do Produto:",
+                key="busca_prod_termo",
+                placeholder="Ex: Tang, Coca Cola, Sabão Omo, 3, 26, Arroz..."
+            )
 
             # Sugestão de produtos
             produto_encontrado_cod = None
-            if termo_busca:
+            if termo_busca and termo_busca.strip():
                 parquet_path = "bdados/query.parquet"
                 import os
                 if os.path.exists(parquet_path):
@@ -496,23 +583,41 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         df_p.columns = [str(c).strip() for c in df_p.columns]
                         df_p_uniq = df_p.drop_duplicates(subset=["CODIGO_PRODUTO"])
                         
-                        if termo_busca.isdigit():
-                            filtro = df_p_uniq["CODIGO_PRODUTO"] == int(termo_busca)
+                        termo_limpo = termo_busca.strip()
+                        if termo_limpo.isdigit():
+                            num_val = int(termo_limpo)
+                            filtro = (df_p_uniq["CODIGO_PRODUTO"] == num_val)
+                            if "CODIGO_FAMILIA" in df_p_uniq.columns:
+                                filtro = filtro | (df_p_uniq["CODIGO_FAMILIA"] == num_val)
                         else:
-                            filtro = df_p_uniq["DESCRICAO_PRODUTO"].astype(str).str.contains(termo_busca, case=False, na=False)
+                            tokens = [t.strip().upper() for t in termo_limpo.split() if t.strip()]
+                            desc_col = df_p_uniq["DESCRICAO_PRODUTO"].astype(str).str.upper()
+                            fam_col = df_p_uniq["DESCRICAO_FAMILIA"].astype(str).str.upper() if "DESCRICAO_FAMILIA" in df_p_uniq.columns else desc_col
+                            forn_col = df_p_uniq["FORNECEDOR"].astype(str).str.upper() if "FORNECEDOR" in df_p_uniq.columns else desc_col
+                            
+                            filtro = pd.Series(True, index=df_p_uniq.index)
+                            for tok in tokens:
+                                filtro = filtro & (desc_col.str.contains(tok, regex=False, na=False) | fam_col.str.contains(tok, regex=False, na=False) | forn_col.str.contains(tok, regex=False, na=False))
                         
-                        match_df = df_p_uniq[filtro].head(15)
+                        match_df = df_p_uniq[filtro].head(40)
                         if not match_df.empty:
-                            opcoes_dict = {
-                                f"{int(row['CODIGO_PRODUTO'])} - {row['DESCRICAO_PRODUTO']} [{row.get('FORNECEDOR') or row.get('COMPRADOR') or 'GERAL'}]": int(row['CODIGO_PRODUTO'])
-                                for _, row in match_df.iterrows()
-                            }
-                            sel_label = st.selectbox("Selecione o Produto Encontrado:", list(opcoes_dict.keys()))
+                            col_b2.caption(f"🎯 **{len(match_df)} produto(s)** encontrados")
+                            opcoes_dict = {}
+                            for _, row in match_df.iterrows():
+                                p_cod = int(row['CODIGO_PRODUTO'])
+                                desc = row['DESCRICAO_PRODUTO']
+                                forn = row.get('FORNECEDOR') or row.get('COMPRADOR') or 'GERAL'
+                                fam_cod = row.get('CODIGO_FAMILIA')
+                                fam_tag = f" [👨‍👩‍👧‍👦 Família {int(fam_cod)}]" if pd.notna(fam_cod) and int(fam_cod) > 0 else ""
+                                label = f"{p_cod} — {desc}{fam_tag} [{forn}]"
+                                opcoes_dict[label] = p_cod
+                            
+                            sel_label = st.selectbox("Selecione o Produto para Configurar Mix e Exposição:", list(opcoes_dict.keys()), key="sel_prod_busca_box")
                             produto_encontrado_cod = opcoes_dict[sel_label]
                         else:
-                            st.warning("Nenhum produto localizado com esse termo.")
+                            st.warning(f"Nenhum produto localizado com o termo '{termo_busca}'. Tente buscar por palavras parciais ou outro código.")
                     except Exception as e:
-                        st.error(f"Erro ao buscar no parquet: {e}")
+                        st.error(f"Erro ao buscar no catálogo: {e}")
 
             if produto_encontrado_cod:
                 prod_data = carregar_dados_produto_consolidado(
@@ -728,18 +833,74 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                 exp_label = f"📦 [{it.get('fornecedor') or 'GERAL'}] `{it['produto_codigo']}` — {it['descricao_snapshot']}{fam_tag} | {status_lojas_tag}"
                 
                 with st.expander(exp_label):
-                    c_act1, c_act2 = st.columns([4, 1])
+                    c_act1, c_act2, c_act3 = st.columns([3, 1.4, 1.1])
                     c_act1.write(f"🏢 **Fornecedor:** {it.get('fornecedor') or 'GERAL'} | 🏷️ **Depto:** {it.get('departamento') or 'N/D'} | 📦 **Emb Compra:** {it['embalagem_compra']} un | 🚚 **Emb Transf:** {it['embalagem_transferencia']} un")
                     if it.get("codigo_familia"):
                         c_act1.caption(f"👨‍👩‍👧‍👦 **Família de Exposição:** `{it['codigo_familia']}` — {it.get('descricao_familia', 'N/D')} (Rateio em {it.get('total_skus_familia', 1)} SKUs)")
                     
-                    if c_act2.button("🗑️ Remover do Mix", key=f"del_prod_{it['produto_codigo']}", type="secondary"):
-                        suc, msg = remover_item_campanha(engine, camp_id, it["produto_codigo"], usuario_atual)
-                        if suc:
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
+                    with c_act2:
+                        with st.popover("✏️ Alterar Exposição", help="Altera os tipos de exposição das lojas (ex: Ponta para Ilha)"):
+                            st.markdown(f"#### 🏷️ Alterar Exposição — SKU `{it['produto_codigo']}`")
+                            st.caption("Altere a estrutura de exposição por loja (ex: Ponta de Gôndola para Ilha).")
+                            
+                            chk_prop_fam = False
+                            if it.get("codigo_familia"):
+                                chk_prop_fam = st.checkbox(
+                                    f"👨‍👩‍👧‍👦 Aplicar para TODOS os {it.get('total_skus_familia', 1)} SKUs da Família {it['codigo_familia']}",
+                                    value=True,
+                                    key=f"prop_fam_chk_{it['item_id']}"
+                                )
+
+                            novas_lojas_edit = []
+                            for l_orig in it["lojas"]:
+                                lj_c = l_orig["loja_codigo"]
+                                lj_n = l_orig["loja_nome"]
+                                tipo_nome_orig = str(l_orig.get("tipo_exposicao_nome") or "INATIVA").strip().upper()
+                                idx_tipo_orig = lista_nomes_tipos.index(tipo_nome_orig) if tipo_nome_orig in lista_nomes_tipos else idx_inativa_padrao
+                                
+                                c_e1, c_e2 = st.columns([2, 1])
+                                sel_t = c_e1.selectbox(
+                                    f"Loja {lj_c}:",
+                                    options=lista_nomes_tipos,
+                                    index=idx_tipo_orig,
+                                    key=f"edit_exp_{it['item_id']}_{lj_c}"
+                                )
+                                sug_v = c_e2.number_input(
+                                    f"Sug. Compras (un):",
+                                    min_value=0,
+                                    value=int(l_orig.get("volume_comprador") or 0),
+                                    step=1,
+                                    key=f"edit_sug_{it['item_id']}_{lj_c}"
+                                )
+                                novas_lojas_edit.append({
+                                    "loja_codigo": lj_c,
+                                    "tipo_exposicao_id": mapa_tipos_exp[sel_t],
+                                    "volume_comprador": sug_v
+                                })
+
+                            if st.button("💾 Salvar Alterações de Exposição", type="primary", key=f"btn_save_exp_{it['item_id']}"):
+                                suc_ae, msg_ae = alterar_exposicao_lojas_item(
+                                    engine=engine,
+                                    campanha_id=camp_id,
+                                    item_id=it["item_id"],
+                                    dados_lojas=novas_lojas_edit,
+                                    usuario=usuario_atual,
+                                    propagar_familia=chk_prop_fam
+                                )
+                                if suc_ae:
+                                    st.success(msg_ae)
+                                    st.rerun()
+                                else:
+                                    st.error(msg_ae)
+
+                    with c_act3:
+                        if st.button("🗑️ Remover", key=f"del_prod_{it['produto_codigo']}", type="secondary"):
+                            suc, msg = remover_item_campanha(engine, camp_id, it["produto_codigo"], usuario_atual)
+                            if suc:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
                     # Tabela Resumo das Lojas para este produto
                     lojas_it_df = pd.DataFrame([
