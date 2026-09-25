@@ -373,11 +373,11 @@ def show_campanhas_supply_page(engine, base_data_path: str = "data"):
                 f"{cap_total_estrutura_cx:,} cx",
                 f"{cap_total_estrutura_un:,} un (Móvel Inteiro)"
             )
+            taxa_rateio = f"Rateio {int(round(1/skus_compartilhados*100))}%" if skus_compartilhados > 1 else "Exclusivo"
             col_res4.metric(
                 f"Capacidade por SKU (1 de {skus_compartilhados})",
                 f"{cap_sku_cx:,} cx",
-                f"{capacidade_calculada_sku:,} un (Rateio {1/skus_compartilhados*100:.0f}%)" if skus_compartilhados > 1 else f"{capacidade_calculada_sku:,} un (Exclusivo)",
-                delta="Rateio Família" if skus_compartilhados > 1 else "Exclusivo"
+                f"{capacidade_calculada_sku:,} un ({taxa_rateio})"
             )
 
         # Tabela resumo comparativa dos tipos de exposição
