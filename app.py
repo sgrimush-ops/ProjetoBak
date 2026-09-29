@@ -25,6 +25,7 @@ from page.campanhas_compras import show_campanhas_compras_page
 from page.campanhas_supply import show_campanhas_supply_page
 from page.campanhas_loja import show_campanhas_loja_page
 from page.campanhas_admin_exposicao import show_campanhas_admin_page
+from page.admin_fornecedor import show_admin_fornecedor_page
 from services.campanha_db import create_campanhas_tables
 from services.campanha_service import expirar_campanhas_vencidas
 
@@ -537,6 +538,7 @@ def main_app():
         paginas["Administração"] = lambda: show_admin_page(
             engine, BASE_DATA_PATH)
         paginas["Admin Uploads"] = lambda: show_admin_uploads_page(engine, BASE_DATA_PATH)
+        paginas["Admin Fornecedores & Representantes"] = lambda: show_admin_fornecedor_page(engine, BASE_DATA_PATH)
 
     # Páginas do Módulo de Campanhas de Exposição
     role_str = str(st.session_state.get("role", "")).strip().lower()

@@ -154,6 +154,10 @@ def show_fornecedor_login(engine):
             st.error("Usuário ou senha de fornecedor inválidos.")
 
 
+BASE_DATA_PATH = os.environ.get("RENDER_DISK_PATH", "data")
+os.makedirs(BASE_DATA_PATH, exist_ok=True)
+
+
 def fornecedor_area_main(engine):
     """Área principal para fornecedores logados."""
     username = st.session_state.get('fornecedor_username', '')
@@ -162,12 +166,12 @@ def fornecedor_area_main(engine):
 
     # Menu da área de fornecedor
     paginas_fornecedor = {
-        "Página Inicial": lambda: show_area_fornecedor(),
+        "Página Inicial": lambda: show_area_fornecedor(BASE_DATA_PATH),
         "Contato / Suporte": lambda: show_contato_fornecedor_page(engine),
     }
     if role == 'admin_fornecedor':
-        paginas_fornecedor["Admin Fornecedores"] = (
-            lambda: show_admin_fornecedor_page(engine)
+        paginas_fornecedor["Admin Fornecedores & Representantes"] = (
+            lambda: show_admin_fornecedor_page(engine, BASE_DATA_PATH)
         )
 
     page_choice = st.sidebar.radio(
