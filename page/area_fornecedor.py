@@ -74,32 +74,34 @@ def create_fornecedor_ticket(engine, username, assunto, mensagem):
 
 # --- Funções de Banco de Dados ---
 def save_fornecedor_pedidos(engine, pedidos_df):
-    """Salva pedidos do fornecedor na tabela pedidos_consolidados."""
+    """Salva pedidos do fornecedor na tabela pedidos_consolidados de forma resiliente."""
     try:
-        pedidos_code_col = resolve_pedidos_codigo_col(engine)
-        pedidos_desc_col = resolve_pedidos_descricao_col(engine)
-        pedidos_emb_col = resolve_pedidos_emb_col(engine)
+        from sqlalchemy import inspect
+        try:
+            insp = inspect(engine)
+            cols_db = {c['name'].lower() for c in insp.get_columns("pedidos_consolidados")}
+        except Exception:
+            cols_db = _get_table_columns(engine, "pedidos_consolidados")
 
-        rename_map = {}
-        if pedidos_code_col != "codigo_interno":
-            rename_map["codigo_interno"] = pedidos_code_col
-        if pedidos_desc_col != "descricao":
-            rename_map["descricao"] = pedidos_desc_col
-        if pedidos_emb_col != "embalagem":
-            rename_map["embalagem"] = pedidos_emb_col
+        df_real = pedidos_df.copy()
 
-        df_real = pedidos_df.rename(columns=rename_map).copy()
+        # Compatibilidade com colunas legadas se existirem
+        if cols_db:
+            if "codigo" in cols_db and "codigo_interno" not in cols_db and "codigo_interno" in df_real.columns:
+                df_real["codigo"] = df_real["codigo_interno"]
 
-        # Garante embseparacao se existir na tabela
-        if has_table_column(engine, "pedidos_consolidados", "embseparacao") and "embseparacao" not in df_real.columns:
-            if "embalagem" in df_real.columns:
+            if "embalagem" in cols_db and "embseparacao" not in cols_db and "embseparacao" in df_real.columns:
+                df_real["embalagem"] = df_real["embseparacao"]
+
+            if "embseparacao" in cols_db and "embseparacao" not in df_real.columns and "embalagem" in df_real.columns:
                 df_real["embseparacao"] = df_real["embalagem"]
 
-        # Compatibilidade com colunas legadas
-        if has_table_column(engine, "pedidos_consolidados", "codigo") and "codigo" not in df_real.columns:
-            code_col = pedidos_code_col if pedidos_code_col in df_real.columns else "codigo_interno"
-            if code_col in df_real.columns:
-                df_real["codigo"] = df_real[code_col]
+            cols_validas = [c for c in df_real.columns if c.lower() in cols_db and c.lower() != "id"]
+            if cols_validas:
+                df_real = df_real[cols_validas]
+
+        # Garante remoção de colunas com nomes duplicados
+        df_real = df_real.loc[:, ~df_real.columns.duplicated()]
 
         with engine.begin() as conn:
             df_real.to_sql(
@@ -107,6 +109,7 @@ def save_fornecedor_pedidos(engine, pedidos_df):
                 con=conn,
                 if_exists="append",
                 index=False,
+                method="multi",
             )
         return True
     except Exception as e:
@@ -507,7 +510,6 @@ def show_area_fornecedor(base_data_path: str = None):
                         "descricao": pinfo.get("descricao", "SEM DESCRIÇÃO"),
                         "codigo_ean": pinfo.get("codigo_ean", ""),
                         "embseparacao": int(pinfo.get("embalagem", 1)),
-                        "embalagem": int(pinfo.get("embalagem", 1)),
                         f"loja_{selected_loja}": qtd,
                         "total_cx": qtd,
                         "data_pedido": now_brazil(),
