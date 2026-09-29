@@ -234,7 +234,8 @@ def show_area_fornecedor(base_data_path: str = None):
             empresa_fallback=empresa,
             is_admin=is_admin,
             base_data_path=base_data_path,
-            filtro_fornecedor_selecionado=filtro_forn_cod
+            filtro_fornecedor_selecionado=filtro_forn_cod,
+            codigo_loja=selected_loja
         )
 
     if mix_df.empty:
@@ -379,6 +380,9 @@ def show_area_fornecedor(base_data_path: str = None):
         "estoque_cd": st.column_config.NumberColumn(
             "Estoque CD15 (Cx)", disabled=True, format="%d"
         ),
+        "estoque_loja": st.column_config.NumberColumn(
+            f"Estoque Loja {selected_loja} (Cx)", disabled=True, format="%d"
+        ),
         "Pedido (Cx)": st.column_config.NumberColumn(
             "Pedido (Cx)", min_value=0, step=1
         ),
@@ -386,7 +390,7 @@ def show_area_fornecedor(base_data_path: str = None):
 
     cols_exibir = [
         "codigo_interno", "descricao", "fornecedor_label",
-        "codigo_ean", "embalagem", "estoque_cd", "Pedido (Cx)"
+        "codigo_ean", "embalagem", "estoque_cd", "estoque_loja", "Pedido (Cx)"
     ]
     cols_existentes = [c for c in cols_exibir if c in page_df.columns]
 
@@ -474,6 +478,8 @@ def show_area_fornecedor(base_data_path: str = None):
                 "Produto": pinfo.get("descricao", "Produto"),
                 "Fornecedor": pinfo.get("fornecedor_label", ""),
                 "Emb.": pinfo.get("embalagem", 1),
+                "Estoque CD": pinfo.get("estoque_cd", 0),
+                "Estoque Loja": pinfo.get("estoque_loja", 0),
                 "Pedido (Cx)": qtd,
                 "Total Unidades": qtd * int(pinfo.get("embalagem", 1))
             })

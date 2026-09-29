@@ -199,7 +199,8 @@ def load_produtos_para_fornecedor(
     empresa_fallback: str = None,
     is_admin: bool = False,
     base_data_path: str = None,
-    filtro_fornecedor_selecionado: int = None
+    filtro_fornecedor_selecionado: int = None,
+    codigo_loja: str = None
 ) -> pd.DataFrame:
     """
     Carrega e formata produtos do query.parquet com estoque CD15, EAN e embalagem correta.
@@ -284,6 +285,25 @@ def load_produtos_para_fornecedor(
         df_produtos["estoque_cd"] = pd.to_numeric(df_produtos["estoque_cd"], errors="coerce").fillna(0).astype(int)
     else:
         df_produtos["estoque_cd"] = 0
+
+    # --- APURAÇÃO DE ESTOQUE NA LOJA SELECIONADA ---
+    if codigo_loja and "CODIGO_EMPRESA" in df_raw.columns and "QUANTIDADE_DISPONIVEL" in df_raw.columns:
+        loja_limpa = str(codigo_loja).strip()
+        if loja_limpa.lower().startswith("loja_"):
+            loja_limpa = loja_limpa[5:]
+        
+        try:
+            loja_num = int(loja_limpa)
+            mask_loja = df_raw["CODIGO_EMPRESA"].astype(str).str.strip().isin([str(loja_num), f"{loja_num:03d}", loja_limpa])
+        except (ValueError, TypeError):
+            mask_loja = df_raw["CODIGO_EMPRESA"].astype(str).str.strip().str.upper() == loja_limpa.upper()
+            
+        df_loja_calc = df_raw[mask_loja].groupby("CODIGO_PRODUTO")["QUANTIDADE_DISPONIVEL"].sum().reset_index()
+        df_loja_calc.rename(columns={"QUANTIDADE_DISPONIVEL": "estoque_loja"}, inplace=True)
+        df_produtos = df_produtos.merge(df_loja_calc, on="CODIGO_PRODUTO", how="left")
+        df_produtos["estoque_loja"] = pd.to_numeric(df_produtos["estoque_loja"], errors="coerce").fillna(0).astype(int)
+    else:
+        df_produtos["estoque_loja"] = 0
         
     # --- EMBALAGEM ---
     # Prioridade: EMBL_TRANSFERENCIA > EMBL_COMPRA > 1
@@ -334,7 +354,7 @@ def load_produtos_para_fornecedor(
     
     colunas_ordenadas = [
         "codigo_interno", "descricao", "fornecedor_label", "cod_fornecedor",
-        "fornecedor", "codigo_ean", "embalagem", "estoque_cd"
+        "fornecedor", "codigo_ean", "embalagem", "estoque_cd", "estoque_loja"
     ]
     cols_existentes = [c for c in colunas_ordenadas if c in df_produtos.columns]
     
