@@ -18,7 +18,6 @@ from page import (
 )
 
 # --- Constantes ---
-ITEMS_PER_PAGE = 30
 LISTA_LOJAS_PADRAO = [
     "001", "002", "003", "004", "005", "006", "007", "008",
     "011", "012", "013", "014", "016", "017", "018",
@@ -119,7 +118,7 @@ def save_fornecedor_pedidos(engine, pedidos_df):
 def show_area_fornecedor(base_data_path: str = None):
     """
     Área principal do fornecedor / representante para digitar pedidos de mix.
-    Conectado diretamente ao catálogo analítico query.parquet.
+    Conectado diretamente ao catálogo analítico query.parquet com digitação sem delay.
     """
     st.title("📦 Área do Fornecedor & Representante - Pedidos de Mix")
 
@@ -184,7 +183,6 @@ def show_area_fornecedor(base_data_path: str = None):
     # --- Seletor de Fornecedor Específico (se Admin ou se Representante de Múltiplos) ---
     filtro_forn_cod = None
     if is_admin and not codigos_autorizados:
-        # Admin sem filtro fixo pode escolher qualquer indústria do catálogo
         st.markdown("### 🏢 Seleção de Fornecedor (Modo Admin)")
         opcoes_forn = ["Todos os Fornecedores"] + catalog_df["label"].tolist()
         escolha_forn = st.selectbox(
@@ -198,7 +196,6 @@ def show_area_fornecedor(base_data_path: str = None):
             if cod_str.isdigit():
                 filtro_forn_cod = int(cod_str)
     elif len(codigos_autorizados) > 1:
-        # Representante multi-fornecedores pode filtrar por uma marca específica
         st.markdown("### 🏢 Filtrar por Indústria / Marca")
         sub_catalog = catalog_df[catalog_df["cod_fornecedor"].isin(codigos_autorizados)]
         opcoes_rep = ["Todas as Minhas Marcas"] + sub_catalog["label"].tolist()
@@ -244,16 +241,15 @@ def show_area_fornecedor(base_data_path: str = None):
         if not is_admin and not codigos_autorizados:
             st.warning(
                 f"⚠️ Nenhum fornecedor/indústria vinculado ao usuário '{username}'.\n\n"
-                "Solicite ao administrador para vincular as indústrias que você representa na aba **'Admin Fornecedores'**."
+                "Solicite ao administrador para vincular as indústrias que você representa na aba **'Admin Fornecedores & Representantes'**."
             )
         else:
             st.warning(
-                f"Nenhum produto encontrado para a seleção atual no `query.parquet`."
+                "Nenhum produto encontrado para a seleção atual no `query.parquet`."
             )
         return
 
     total_items = len(mix_df)
-    st.success(f"📦 **Total de produtos disponíveis no seu mix:** {total_items}")
 
     # --- Filtros de Busca ---
     st.markdown("### 🔍 Pesquisar Itens")
@@ -301,43 +297,69 @@ def show_area_fornecedor(base_data_path: str = None):
         st.warning("Nenhum produto encontrado com os filtros aplicados.")
         return
 
-    if total_filtered != total_items:
-        st.info(f"**Produtos filtrados:** {total_filtered} de {total_items}")
-
-    # --- Paginação ---
-    st.markdown("---")
-    st.markdown("### 📝 Digite as Quantidades (Caixas)")
-
+    # --- Configurações de Paginação & Visualização Rápida ---
     if "fornecedor_page" not in st.session_state:
         st.session_state.fornecedor_page = 0
     if "fornecedor_pedidos_salvos" not in st.session_state:
         st.session_state.fornecedor_pedidos_salvos = {}
+    if "fornecedor_page_size" not in st.session_state:
+        st.session_state.fornecedor_page_size = 30
 
-    current_page = st.session_state.fornecedor_page
-    total_pages = max(1, (total_filtered - 1) // ITEMS_PER_PAGE + 1)
-    
-    if current_page >= total_pages:
-        current_page = 0
-        st.session_state.fornecedor_page = 0
+    col_cfg1, col_cfg2, col_cfg3 = st.columns([1, 1, 2])
+    with col_cfg1:
+        opcoes_qtd_pag = [20, 30, 50, 100, 200]
+        cur_size_idx = opcoes_qtd_pag.index(st.session_state.fornecedor_page_size) if st.session_state.fornecedor_page_size in opcoes_qtd_pag else 1
+        page_size_escolhido = st.selectbox(
+            "Itens por página:",
+            opcoes_qtd_pag,
+            index=cur_size_idx,
+            key="sel_itens_por_pagina"
+        )
+        if page_size_escolhido != st.session_state.fornecedor_page_size:
+            st.session_state.fornecedor_page_size = page_size_escolhido
+            st.session_state.fornecedor_page = 0
+            st.rerun()
 
-    start_idx = current_page * ITEMS_PER_PAGE
-    end_idx = min(start_idx + ITEMS_PER_PAGE, total_filtered)
+    items_per_page = st.session_state.fornecedor_page_size
+    total_pages = max(1, (total_filtered - 1) // items_per_page + 1)
+    current_page = min(st.session_state.fornecedor_page, total_pages - 1)
+    st.session_state.fornecedor_page = current_page
+
+    with col_cfg2:
+        opcoes_pags = list(range(1, total_pages + 1))
+        pag_escolhida = st.selectbox(
+            "Ir para a página:",
+            opcoes_pags,
+            index=current_page,
+            key="sel_ir_para_pagina"
+        ) - 1
+        if pag_escolhida != current_page:
+            st.session_state.fornecedor_page = pag_escolhida
+            st.rerun()
+
+    with col_cfg3:
+        st.write("")
+        st.write("")
+        st.caption(f"📦 Total: **{total_filtered} produtos** | **Página {current_page + 1} de {total_pages}**")
+
+    start_idx = current_page * items_per_page
+    end_idx = min(start_idx + items_per_page, total_filtered)
 
     page_df = filtered_df.iloc[start_idx:end_idx].copy().reset_index(drop=True)
 
-    # Restaura pedidos já salvos nesta página
+    # Restaura pedidos já salvos em memória
     page_df["Pedido (Cx)"] = 0
     for i, row in page_df.iterrows():
         cod_prod = int(row["codigo_interno"])
         key = f"{selected_loja}_{cod_prod}"
         if key in st.session_state.fornecedor_pedidos_salvos:
-            page_df.at[i, "Pedido (Cx)"] = st.session_state.fornecedor_pedidos_salvos[key]
+            page_df.at[i, "Pedido (Cx)"] = int(st.session_state.fornecedor_pedidos_salvos[key])
 
-    col_pg1, col_pg2 = st.columns([2, 1])
-    with col_pg1:
-        st.write(f"**Página {current_page + 1} de {total_pages}** (Exibindo {start_idx + 1} a {end_idx} de {total_filtered} itens)")
+    # --- Formulário Isolado com Digitação em Tempo Real Sem Delay ---
+    st.markdown("---")
+    st.markdown("### 📝 Digite as Quantidades (Caixas)")
+    st.caption("⚡ **Digitação rápida ativada:** Navegue entre as linhas com as setas ou Enter sem travamento. Clique em **Salvar** para registrar a página.")
 
-    # Editor de dados
     colunas_config = {
         "codigo_interno": st.column_config.NumberColumn(
             "Código Interno", disabled=True, format="%d"
@@ -368,81 +390,66 @@ def show_area_fornecedor(base_data_path: str = None):
     ]
     cols_existentes = [c for c in cols_exibir if c in page_df.columns]
 
-    edited_df = st.data_editor(
-        page_df[cols_existentes],
-        column_config=colunas_config,
-        hide_index=True,
-        use_container_width=True,
-        key=f"forn_editor_{selected_loja}_{current_page}",
-    )
+    # Envolve o grid em um formulário para neutralizar o websocket delay
+    with st.form(f"form_grid_{selected_loja}_{current_page}", clear_on_submit=False):
+        edited_df = st.data_editor(
+            page_df[cols_existentes],
+            column_config=colunas_config,
+            hide_index=True,
+            use_container_width=True,
+            key=f"forn_editor_{selected_loja}_{current_page}",
+        )
 
-    # --- Botões de Navegação e Salvamento da Página ---
-    st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
+        st.markdown("---")
+        col_b1, col_b2, col_b3 = st.columns([1, 2, 1])
+        
+        with col_b1:
+            btn_voltar = st.form_submit_button(
+                "⬅️ Salvar e Página Anterior",
+                disabled=(current_page == 0),
+                use_container_width=True
+            )
+            
+        with col_b2:
+            btn_salvar_avancar = st.form_submit_button(
+                "💾 Salvar Página e Avançar ➡️" if current_page < total_pages - 1 else "💾 Salvar Quantidades Desta Página",
+                type="primary",
+                use_container_width=True
+            )
 
-    with col1:
-        if current_page > 0:
-            if st.button("⬅️ Página Anterior", use_container_width=True):
-                for _, row_ed in edited_df.iterrows():
-                    cod_p = int(row_ed["codigo_interno"])
-                    qtd = int(row_ed.get("Pedido (Cx)", 0))
-                    key = f"{selected_loja}_{cod_p}"
-                    if qtd > 0:
-                        st.session_state.fornecedor_pedidos_salvos[key] = qtd
-                    elif key in st.session_state.fornecedor_pedidos_salvos:
-                        del st.session_state.fornecedor_pedidos_salvos[key]
-                st.session_state.fornecedor_page -= 1
-                st.rerun()
+        with col_b3:
+            btn_avancar = st.form_submit_button(
+                "Salvar e Próxima ➡️",
+                disabled=(current_page >= total_pages - 1),
+                use_container_width=True
+            )
 
-    with col2:
-        if st.button("💾 Salvar Página e Avançar", type="primary", use_container_width=True):
-            salvos_nesta_pag = 0
-            for _, row_ed in edited_df.iterrows():
-                cod_p = int(row_ed["codigo_interno"])
-                qtd = int(row_ed.get("Pedido (Cx)", 0))
-                key = f"{selected_loja}_{cod_p}"
-                if qtd > 0:
-                    st.session_state.fornecedor_pedidos_salvos[key] = qtd
-                    salvos_nesta_pag += 1
-                elif key in st.session_state.fornecedor_pedidos_salvos:
-                    del st.session_state.fornecedor_pedidos_salvos[key]
+    # Processamento do formulário
+    if btn_voltar or btn_salvar_avancar or btn_avancar:
+        salvos_count = 0
+        for _, row_ed in edited_df.iterrows():
+            cod_p = int(row_ed["codigo_interno"])
+            qtd = int(row_ed.get("Pedido (Cx)", 0) or 0)
+            key = f"{selected_loja}_{cod_p}"
+            if qtd > 0:
+                st.session_state.fornecedor_pedidos_salvos[key] = qtd
+                salvos_count += 1
+            elif key in st.session_state.fornecedor_pedidos_salvos:
+                del st.session_state.fornecedor_pedidos_salvos[key]
 
-            if salvos_nesta_pag > 0:
-                st.success(f"✅ {salvos_nesta_pag} item(ns) gravados na memória!")
-            else:
-                st.info("Nenhuma quantidade digitada nesta página.")
+        if btn_voltar and current_page > 0:
+            st.session_state.fornecedor_page = current_page - 1
+            st.rerun()
+        elif (btn_salvar_avancar or btn_avancar) and current_page < total_pages - 1:
+            st.session_state.fornecedor_page = current_page + 1
+            st.rerun()
+        else:
+            st.success(f"✅ Quantidades desta página gravadas com sucesso ({salvos_count} itens preenchidos)!")
+            st.rerun()
 
-            if current_page < total_pages - 1:
-                st.session_state.fornecedor_page += 1
-                st.rerun()
-
-    with col3:
-        if current_page < total_pages - 1:
-            if st.button("Próxima Página ➡️", use_container_width=True):
-                for _, row_ed in edited_df.iterrows():
-                    cod_p = int(row_ed["codigo_interno"])
-                    qtd = int(row_ed.get("Pedido (Cx)", 0))
-                    key = f"{selected_loja}_{cod_p}"
-                    if qtd > 0:
-                        st.session_state.fornecedor_pedidos_salvos[key] = qtd
-                    elif key in st.session_state.fornecedor_pedidos_salvos:
-                        del st.session_state.fornecedor_pedidos_salvos[key]
-                st.session_state.fornecedor_page += 1
-                st.rerun()
-
-    # --- Resumo e Finalização ---
+    # --- Resumo Geral de Pedidos Gravados & Envio para Aprovação ---
     st.markdown("---")
     st.markdown("### 🚀 Finalizar Envio para Aprovação")
-    
-    # Atualiza memória com dados visíveis antes de checar total
-    for _, row_ed in edited_df.iterrows():
-        cod_p = int(row_ed["codigo_interno"])
-        qtd = int(row_ed.get("Pedido (Cx)", 0))
-        key = f"{selected_loja}_{cod_p}"
-        if qtd > 0:
-            st.session_state.fornecedor_pedidos_salvos[key] = qtd
-        elif key in st.session_state.fornecedor_pedidos_salvos:
-            del st.session_state.fornecedor_pedidos_salvos[key]
 
     pedidos_loja_atual = {
         k: v for k, v in st.session_state.fornecedor_pedidos_salvos.items()
@@ -452,7 +459,7 @@ def show_area_fornecedor(base_data_path: str = None):
     total_pedidos_salvos = len(pedidos_loja_atual)
     
     if total_pedidos_salvos > 0:
-        st.success(f"📊 Você possui **{total_pedidos_salvos} produtos** com quantidades preenchidas para a **Loja {selected_loja}**.")
+        st.success(f"📊 Você possui **{total_pedidos_salvos} produtos** com quantidades salvas para a **Loja {selected_loja}**.")
         
         # Exibe resumo em tabela
         resumo_lista = []
@@ -547,4 +554,4 @@ def show_area_fornecedor(base_data_path: str = None):
                 st.session_state.fornecedor_page = 0
                 st.rerun()
     else:
-        st.info("Preencha a coluna **'Pedido (Cx)'** nos produtos desejados acima para enviar.")
+        st.info("Preencha a coluna **'Pedido (Cx)'** nos produtos desejados acima e clique em **Salvar Página** para prosseguir.")
