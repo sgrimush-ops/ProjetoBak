@@ -77,13 +77,22 @@ def save_fornecedor_pedidos(engine, pedidos_df):
     """Salva pedidos do fornecedor na tabela pedidos_consolidados de forma resiliente."""
     try:
         from sqlalchemy import inspect
+        
+        df_real = pedidos_df.copy()
+        df_real.columns = [str(c).lower().strip() for c in df_real.columns]
+
+        # Garante que as colunas de loja existam no PostgreSQL (sempre em minúsculo)
+        with engine.begin() as conn:
+            for col in df_real.columns:
+                if col.startswith("loja_") and col.replace("loja_", "").isalnum():
+                    conn.execute(text(f"ALTER TABLE pedidos_consolidados ADD COLUMN IF NOT EXISTS {col} INTEGER DEFAULT 0"))
+
+        # Inspeciona colunas reais da tabela
         try:
             insp = inspect(engine)
             cols_db = {c['name'].lower() for c in insp.get_columns("pedidos_consolidados")}
         except Exception:
             cols_db = _get_table_columns(engine, "pedidos_consolidados")
-
-        df_real = pedidos_df.copy()
 
         # Compatibilidade com colunas legadas se existirem
         if cols_db:
@@ -96,7 +105,7 @@ def save_fornecedor_pedidos(engine, pedidos_df):
             if "embseparacao" in cols_db and "embseparacao" not in df_real.columns and "embalagem" in df_real.columns:
                 df_real["embseparacao"] = df_real["embalagem"]
 
-            cols_validas = [c for c in df_real.columns if c.lower() in cols_db and c.lower() != "id"]
+            cols_validas = [c for c in df_real.columns if c in cols_db and c != "id"]
             if cols_validas:
                 df_real = df_real[cols_validas]
 
@@ -510,7 +519,7 @@ def show_area_fornecedor(base_data_path: str = None):
                         "descricao": pinfo.get("descricao", "SEM DESCRIÇÃO"),
                         "codigo_ean": pinfo.get("codigo_ean", ""),
                         "embseparacao": int(pinfo.get("embalagem", 1)),
-                        f"loja_{selected_loja}": qtd,
+                        f"loja_{str(selected_loja).lower().strip()}": qtd,
                         "total_cx": qtd,
                         "data_pedido": now_brazil(),
                         "usuario_pedido": username,
@@ -521,7 +530,7 @@ def show_area_fornecedor(base_data_path: str = None):
                     
                     # Preenche colunas das demais lojas com 0
                     for loja_nome in LISTA_LOJAS_PADRAO:
-                        cname = f"loja_{loja_nome}"
+                        cname = f"loja_{str(loja_nome).lower().strip()}"
                         if cname not in registro:
                             registro[cname] = 0
                             
