@@ -12,7 +12,6 @@ from app import main_app as run_baklizi_app
 from app import create_db_tables
 from page.area_fornecedor import show_area_fornecedor
 from page.admin_fornecedor import show_admin_fornecedor_page
-from page.contato_fornecedor import show_contato_fornecedor_page
 
 
 @st.cache_resource
@@ -167,17 +166,19 @@ def fornecedor_area_main(engine):
     # Menu da área de fornecedor
     paginas_fornecedor = {
         "Página Inicial": lambda: show_area_fornecedor(BASE_DATA_PATH),
-        "Contato / Suporte": lambda: show_contato_fornecedor_page(engine),
     }
     if role == 'admin_fornecedor':
         paginas_fornecedor["Admin Fornecedores & Representantes"] = (
             lambda: show_admin_fornecedor_page(engine, BASE_DATA_PATH)
         )
 
-    page_choice = st.sidebar.radio(
-        "Navegação Fornecedor:",
-        list(paginas_fornecedor.keys())
-    )
+    if len(paginas_fornecedor) > 1:
+        page_choice = st.sidebar.radio(
+            "Navegação Fornecedor:",
+            list(paginas_fornecedor.keys())
+        )
+    else:
+        page_choice = "Página Inicial"
 
     # Executa a página escolhida
     paginas_fornecedor[page_choice]()

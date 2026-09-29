@@ -24,50 +24,7 @@ LISTA_LOJAS_PADRAO = [
 ]
 
 
-# --- Funções de Chamado ---
-def create_fornecedor_ticket(engine, username, assunto, mensagem):
-    """Cria um novo ticket de suporte/observação do fornecedor."""
-    now = now_brazil()
-    try:
-        with engine.begin() as conn:
-            query_ticket = text("""
-                INSERT INTO contato_chamados (
-                    usuario_username,
-                    assunto,
-                    data_criacao,
-                    ultimo_update,
-                    status
-                )
-                VALUES (:username, :assunto, :now, :now, 'Aguardando Retorno')
-                RETURNING id;
-            """)
-            result = conn.execute(
-                query_ticket,
-                {"username": username, "assunto": assunto, "now": now},
-            )
-            new_ticket_id = result.scalar_one()
 
-            query_msg = text("""
-                INSERT INTO contato_mensagens (
-                    chamado_id,
-                    remetente_username,
-                    mensagem,
-                    data_envio
-                )
-                VALUES (:chamado_id, :username, :mensagem, :now)
-            """)
-            conn.execute(
-                query_msg,
-                {
-                    "chamado_id": new_ticket_id,
-                    "username": username,
-                    "mensagem": mensagem,
-                    "now": now,
-                },
-            )
-        return True, new_ticket_id
-    except Exception as e:
-        return False, f"Erro ao criar chamado: {e}"
 
 
 # --- Funções de Banco de Dados ---
@@ -497,12 +454,6 @@ def show_area_fornecedor(base_data_path: str = None):
         df_resumo = pd.DataFrame(resumo_lista)
         st.dataframe(df_resumo, hide_index=True, use_container_width=True)
 
-        motivo_pedido = st.text_area(
-            "📝 Observações do Pedido (Opcional):",
-            placeholder="Ex: Campanha especial de vendas, reposição programada, queima de estoque...",
-            key="motivo_pedido_input"
-        )
-
         col_send, col_clear = st.columns([3, 1])
         with col_send:
             if st.button("📤 Enviar Pedido Completo para Aprovação", type="primary", use_container_width=True):
@@ -537,17 +488,6 @@ def show_area_fornecedor(base_data_path: str = None):
                 if pedidos_finais:
                     df_pedidos_salvar = pd.DataFrame(pedidos_finais)
                     if save_fornecedor_pedidos(engine, df_pedidos_salvar):
-                        if motivo_pedido.strip():
-                            assunto = f"Pedido Fornecedor - Loja {selected_loja}"
-                            mensagem = (
-                                f"Pedido enviado pelo representante.\n\n"
-                                f"**Representante:** {username}\n"
-                                f"**Loja:** {selected_loja}\n"
-                                f"**Total de Itens:** {len(pedidos_finais)}\n\n"
-                                f"**Observações:**\n{motivo_pedido}"
-                            )
-                            create_fornecedor_ticket(engine, username, assunto, mensagem)
-
                         st.success(f"🎉 {len(pedidos_finais)} item(ns) enviados com sucesso para aprovação!")
                         st.balloons()
                         
