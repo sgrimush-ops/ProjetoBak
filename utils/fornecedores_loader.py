@@ -40,6 +40,21 @@ def find_parquet_file(filename: str, base_data_path: str = None) -> str | None:
     return None
 
 
+def get_query_parquet_mtime(base_data_path: str = None) -> str | None:
+    """Retorna a data e hora da última modificação do query.parquet formatada no fuso de Brasília."""
+    parquet_path = find_parquet_file("query.parquet", base_data_path)
+    if parquet_path and os.path.exists(parquet_path):
+        try:
+            mtime = os.path.getmtime(parquet_path)
+            from zoneinfo import ZoneInfo
+            from datetime import datetime
+            dt = datetime.fromtimestamp(mtime, ZoneInfo("America/Sao_Paulo"))
+            return dt.strftime("%d/%m/%Y às %H:%M:%S")
+        except Exception:
+            return None
+    return None
+
+
 def parse_fornecedores_acesso(raw_val) -> list[int]:
     """
     Converte valores brutos (JSON, lista, string delimitada, NaN, None) 

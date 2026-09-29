@@ -9,6 +9,7 @@ from utils.fornecedores_loader import (
     format_fornecedores_summary,
     parse_fornecedores_acesso,
     load_produtos_para_fornecedor,
+    get_query_parquet_mtime,
 )
 
 # --- Configurações Globais ---
@@ -215,6 +216,11 @@ def delete_fornecedor(engine, username):
 def show_admin_fornecedor_page(engine, base_data_path: str = None):
     """Interface do painel de administração de fornecedores e representantes."""
     st.title("🛡️ Gestão de Fornecedores & Representantes")
+    
+    data_atualizacao_estoque = get_query_parquet_mtime(base_data_path)
+    if data_atualizacao_estoque:
+        st.caption(f"🕒 **Última atualização dos estoques:** {data_atualizacao_estoque}")
+
     st.markdown(
         "Gerencie acessos de representantes vinculando diretamente as indústrias autorizadas do `query.parquet`."
     )

@@ -9,6 +9,7 @@ from utils.fornecedores_loader import (
     get_all_fornecedores_catalog,
     parse_fornecedores_acesso,
     format_fornecedores_summary,
+    get_query_parquet_mtime,
 )
 from page import (
     resolve_pedidos_codigo_col,
@@ -89,6 +90,11 @@ def show_area_fornecedor(base_data_path: str = None):
     """
     st.title("📦 Área do Fornecedor & Representante - Pedidos de Mix")
 
+    # Data da última atualização dos estoques (query.parquet)
+    data_atualizacao_estoque = get_query_parquet_mtime(base_data_path)
+    if data_atualizacao_estoque:
+        st.caption(f"🕒 **Última atualização dos estoques:** {data_atualizacao_estoque}")
+
     from app import get_engine
     engine = get_engine()
 
@@ -139,10 +145,13 @@ def show_area_fornecedor(base_data_path: str = None):
     
     col_h1, col_h2 = st.columns([3, 1])
     with col_h1:
-        st.info(
+        info_txt = (
             f"👤 **Usuário:** `{username}`\n\n"
             f"🏢 **Indústrias Vinculadas:** {resumo_fornecedores}"
         )
+        if data_atualizacao_estoque:
+            info_txt += f"\n\n🕒 **Última atualização dos estoques:** `{data_atualizacao_estoque}`"
+        st.info(info_txt)
     with col_h2:
         if is_admin:
             st.success("👑 Perfil Administrador")
