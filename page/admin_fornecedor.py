@@ -6,7 +6,6 @@ import json
 from datetime import datetime
 from utils.fornecedores_loader import (
     get_all_fornecedores_catalog,
-    get_fornecedores_options_dict,
     format_fornecedores_summary,
     parse_fornecedores_acesso,
     load_produtos_para_fornecedor,
@@ -106,8 +105,6 @@ def get_all_fornecedores_details(engine, base_data_path: str = None) -> pd.DataF
             role_str = str(role_val or "").strip()
             if role_str == "admin_fornecedor" or emp_str.lower() in ["administração", "administracao"]:
                 return "👑 Acesso Total (Admin)"
-            if emp_str and emp_str.lower() not in ["none", "nan", "null", ""]:
-                return f"Por Nome: {emp_str}"
             return "Nenhum fornecedor vinculado"
 
         df['lojas_fmt'] = df['lojas_acesso'].apply(format_lojas)
@@ -219,25 +216,12 @@ def delete_fornecedor(engine, username):
         return False
 
 
-def _parse_input_codes(codes_str: str) -> list[int]:
-    """Interpreta texto livre com códigos separados por vírgula ou espaço."""
-    if not codes_str:
-        return []
-    cleaned = codes_str.replace(";", ",").replace("\n", ",").replace(" ", ",")
-    parts = [p.strip() for p in cleaned.split(",") if p.strip()]
-    res = []
-    for p in parts:
-        if p.isdigit():
-            res.append(int(p))
-    return sorted(list(set(res)))
-
-
 # --- Lógica de Exibição da Página ---
 def show_admin_fornecedor_page(engine, base_data_path: str = None):
     """Interface do painel de administração de fornecedores e representantes."""
     st.title("🛡️ Gestão de Fornecedores & Representantes")
     st.markdown(
-        "Gerencie acessos de fornecedores e **representantes multi-marcas**, vinculando os códigos das indústrias autorizadas do `query.parquet`."
+        "Gerencie acessos de fornecedores e **representantes multi-marcas**, vinculando as indústrias autorizadas do `query.parquet`."
     )
     
     # Garante que a tabela e os admins existam
@@ -278,7 +262,7 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
     # =========================================================
     with tab1:
         st.subheader("Cadastrar Novo Fornecedor ou Representante")
-        st.caption("Você pode vincular múltiplos fornecedores (ex: Nestlé + Oderich) para um mesmo representante.")
+        st.caption("Digite o código ou nome da indústria no seletor abaixo para vincular os produtos ao representante.")
         
         with st.form("add_fornecedor_form", clear_on_submit=True):
             col_a1, col_a2 = st.columns(2)
@@ -292,24 +276,13 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
                 new_lojas = st.multiselect("Lojas Permitidas para Digitação:", LISTA_LOJAS_FORNECEDOR, default=LISTA_LOJAS_FORNECEDOR, key="add_forn_lojas")
             
             st.markdown("#### 🏢 Fornecedores / Indústrias Autorizadas")
-            st.caption("Selecione na lista ou digite códigos de fornecedor para liberar os produtos no portal:")
-            
             new_fornecedores_sel = st.multiselect(
-                "Selecione os fornecedores no catálogo:",
+                "Selecione os fornecedores (digite o código ou nome para buscar):",
                 options=opcoes_labels,
                 key="add_forn_multisel"
             )
             
-            new_codigos_extras = st.text_input(
-                "Ou cole códigos numéricos separados por vírgula (ex: 15134, 15520, 6979):",
-                placeholder="15134, 15520",
-                key="add_forn_cods_raw"
-            )
-            
-            # Unifica códigos selecionados
-            cods_from_select = [label_to_cod[lbl] for lbl in new_fornecedores_sel if lbl in label_to_cod]
-            cods_from_text = _parse_input_codes(new_codigos_extras)
-            todos_cods = sorted(list(set(cods_from_select + cods_from_text)))
+            todos_cods = [label_to_cod[lbl] for lbl in new_fornecedores_sel if lbl in label_to_cod]
             
             if todos_cods:
                 preview_skus = catalog_df[catalog_df["cod_fornecedor"].isin(todos_cods)]["total_skus"].sum()
@@ -347,7 +320,7 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
                     
                     current_lojas = json.loads(current_lojas_raw) if current_lojas_raw else []
                     current_cods = parse_fornecedores_acesso(current_forn_raw)
-                except Exception as e:
+                except Exception:
                     current_empresa, current_role, current_lojas, current_cods = "", "fornecedor", [], []
                 
                 with st.form("manage_fornecedor_form"):
@@ -360,27 +333,16 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
                         m_lojas = st.multiselect("Lojas Permitidas:", LISTA_LOJAS_FORNECEDOR, default=[l for l in current_lojas if l in LISTA_LOJAS_FORNECEDOR])
                     
                     st.markdown("#### 🏢 Fornecedores Vinculados")
-                    
-                    # Labels atualmente selecionados
                     defaults_labels = [cod_to_label[c] for c in current_cods if c in cod_to_label]
                     
                     m_fornecedores_sel = st.multiselect(
-                        "Fornecedores no Catálogo Consinco:",
+                        "Fornecedores no Catálogo Consinco (digite o código ou nome):",
                         options=opcoes_labels,
                         default=defaults_labels,
                         key="manage_forn_multisel"
                     )
                     
-                    m_cods_raw = st.text_input(
-                        "Adicionar mais códigos de fornecedores (separados por vírgula):",
-                        placeholder="Ex: 15134, 15520",
-                        key="manage_forn_cods_raw"
-                    )
-                    
-                    # Unifica
-                    cods_sel_m = [label_to_cod[lbl] for lbl in m_fornecedores_sel if lbl in label_to_cod]
-                    cods_txt_m = _parse_input_codes(m_cods_raw)
-                    novos_cods_m = sorted(list(set(cods_sel_m + cods_txt_m)))
+                    novos_cods_m = [label_to_cod[lbl] for lbl in m_fornecedores_sel if lbl in label_to_cod]
                     
                     if novos_cods_m:
                         preview_skus = catalog_df[catalog_df["cod_fornecedor"].isin(novos_cods_m)]["total_skus"].sum()
@@ -402,7 +364,7 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
     with tab3:
         st.subheader("🎯 Direcionamento Rápido de Itens para Representante")
         st.markdown(
-            "Use esta aba para atribuir em lote carteiras de indústrias a um representante (ex: **Nestlé**, **Oderich**, **Fruki**, etc.) e inspecionar a lista de produtos resultantes."
+            "Selecione um representante e use o seletor para adicionar ou remover indústrias digitando o código ou nome."
         )
         
         if df_fornecedores.empty:
@@ -430,51 +392,18 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
 
                 st.markdown(f"Configurando fornecedores para: **{rep_user}** ({rep_empresa})")
                 
-                # Busca rápida de fornecedores por texto (filtro dinâmico)
-                col_sr1, col_sr2 = st.columns([2, 1])
-                with col_sr1:
-                    filtro_termo = st.text_input("🔍 Pesquisar Indústria / Fornecedor por Nome ou Código:", placeholder="Ex: Nestle, Oderich, Fruki, 15134", key="filtro_pesquisa_rep")
-                with col_sr2:
-                    st.write("")
-                    st.write("")
-                    if st.button("Limpar Pesquisa"):
-                        filtro_termo = ""
-                
-                # Fornecedores filtrados para exibição
-                df_view = catalog_df.copy()
-                if filtro_termo:
-                    t = filtro_termo.strip().upper()
-                    df_view = df_view[
-                        df_view["nome_fornecedor"].str.contains(t, case=False, na=False) |
-                        df_view["cod_fornecedor"].astype(str).str.contains(t, case=False, na=False)
-                    ]
-                
-                st.caption(f"Mostrando {len(df_view)} fornecedores encontrados:")
-                
-                # Multiselect principal do direcionamento
                 selecionados_atuais_labels = [cod_to_label[c] for c in rep_cods_atuais if c in cod_to_label]
                 
                 novos_labels_escolhidos = st.multiselect(
-                    "Fornecedores Atribuídos ao Representante:",
+                    "Fornecedores Atribuídos ao Representante (digite o código ou nome para buscar e adicionar):",
                     options=opcoes_labels,
                     default=selecionados_atuais_labels,
                     key="rep_direcionamento_multisel"
                 )
                 
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    # Botão para adicionar todos os resultados da busca atual
-                    if filtro_termo and not df_view.empty:
-                        if st.button(f"➕ Adicionar todos os {len(df_view)} fornecedores filtrados acima"):
-                            labels_adicionar = df_view["label"].tolist()
-                            uniao = list(set(novos_labels_escolhidos + labels_adicionar))
-                            st.session_state["rep_direcionamento_multisel"] = uniao
-                            st.rerun()
-                            
-                with col_btn2:
-                    if st.button("🗑️ Limpar Todos os Fornecedores Deste Representante"):
-                        st.session_state["rep_direcionamento_multisel"] = []
-                        st.rerun()
+                if st.button("🗑️ Limpar Todos os Fornecedores Deste Representante"):
+                    st.session_state["rep_direcionamento_multisel"] = []
+                    st.rerun()
                 
                 codigos_finais_rep = [label_to_cod[lbl] for lbl in novos_labels_escolhidos if lbl in label_to_cod]
                 
