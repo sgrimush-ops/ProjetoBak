@@ -14,9 +14,7 @@ from utils.fornecedores_loader import (
 # --- Configurações Globais ---
 LISTA_LOJAS_FORNECEDOR = [
     "001", "002", "003", "004", "005", "006", "007", "008",
-    "011", "012", "013", "014", "016", "017", "018",
-    "F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08", "F09",
-    "F10", "F11", "M12", "M13", "ADM", "RH"
+    "011", "012", "013", "014", "017", "018"
 ]
 ROLES_FORNECEDOR = ["fornecedor", "admin_fornecedor"]
 
