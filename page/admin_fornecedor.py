@@ -87,34 +87,39 @@ def get_all_fornecedores_details(engine, base_data_path: str = None) -> pd.DataF
         catalog_df = get_all_fornecedores_catalog(base_data_path)
 
         def format_lojas(lojas_raw):
-            if not lojas_raw:
+            if lojas_raw is None or pd.isna(lojas_raw):
+                return "Todas (Padrão)"
+            lojas_str = str(lojas_raw).strip()
+            if not lojas_str or lojas_str.lower() in ["none", "nan", "null", "[]"]:
                 return "Todas (Padrão)"
             try:
-                lojas_list = json.loads(lojas_raw)
+                lojas_list = json.loads(lojas_str)
                 return ", ".join(lojas_list) if lojas_list else "Nenhuma"
             except (json.JSONDecodeError, Exception):
-                return str(lojas_raw)
+                return lojas_str
 
         def format_fornecedores_col(forn_raw, role_val, emp_val):
             codigos = parse_fornecedores_acesso(forn_raw)
             if codigos:
                 return format_fornecedores_summary(codigos, catalog_df, max_display=3)
-            if str(role_val).strip() == "admin_fornecedor" or str(emp_val).strip().lower() in ["administração", "administracao"]:
+            emp_str = str(emp_val or "").strip()
+            role_str = str(role_val or "").strip()
+            if role_str == "admin_fornecedor" or emp_str.lower() in ["administração", "administracao"]:
                 return "👑 Acesso Total (Admin)"
-            if emp_val and str(emp_val).strip():
-                return f"Por Nome: {emp_val}"
+            if emp_str and emp_str.lower() not in ["none", "nan", "null", ""]:
+                return f"Por Nome: {emp_str}"
             return "Nenhum fornecedor vinculado"
 
         df['lojas_fmt'] = df['lojas_acesso'].apply(format_lojas)
         df['forn_fmt'] = df.apply(lambda r: format_fornecedores_col(r['fornecedores_acesso'], r['role'], r['empresa']), axis=1)
         
         df_out = pd.DataFrame({
-            'Usuário': df['username'],
-            'Empresa / Representação': df['empresa'].fillna(""),
-            'Função': df['role'],
+            'Usuário': df['username'].fillna("").astype(str),
+            'Empresa / Representação': df['empresa'].fillna("").astype(str),
+            'Função': df['role'].fillna("fornecedor").astype(str),
             'Lojas Permitidas': df['lojas_fmt'],
             'Fornecedores Autorizados': df['forn_fmt'],
-            'Status': df['status_logado'].fillna("DESLOGADO")
+            'Status': df['status_logado'].fillna("DESLOGADO").astype(str)
         })
         return df_out
         

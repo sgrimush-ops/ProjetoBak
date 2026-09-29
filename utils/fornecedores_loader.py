@@ -6,6 +6,7 @@ import os
 import json
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sqlalchemy import text
 
 
@@ -40,22 +41,39 @@ def find_parquet_file(filename: str, base_data_path: str = None) -> str | None:
 
 
 def parse_fornecedores_acesso(raw_val) -> list[int]:
-    """Converte valores brutos (JSON, lista, string delimitada) em lista de inteiros (códigos de fornecedor)."""
+    """
+    Converte valores brutos (JSON, lista, string delimitada, NaN, None) 
+    em lista segura de inteiros (códigos de fornecedor).
+    """
     if raw_val is None:
         return []
+    try:
+        if pd.isna(raw_val):
+            return []
+    except Exception:
+        pass
+        
     if isinstance(raw_val, list):
         res = []
         for x in raw_val:
-            try:
-                res.append(int(x))
-            except (ValueError, TypeError):
-                pass
-        return res
-    if isinstance(raw_val, (int, float)):
-        return [int(raw_val)]
+            if x is not None:
+                try:
+                    if not pd.isna(x):
+                        res.append(int(float(x)))
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        return sorted(list(set(res)))
+        
+    if isinstance(raw_val, (int, float, np.number)):
+        try:
+            if pd.isna(raw_val) or np.isnan(raw_val):
+                return []
+            return [int(raw_val)]
+        except (ValueError, TypeError, OverflowError):
+            return []
     
     raw_str = str(raw_val).strip()
-    if not raw_str:
+    if not raw_str or raw_str.lower() in ["nan", "none", "null", "[]", "", "nat"]:
         return []
         
     try:
@@ -63,13 +81,16 @@ def parse_fornecedores_acesso(raw_val) -> list[int]:
         if isinstance(data, list):
             res = []
             for x in data:
-                try:
-                    res.append(int(x))
-                except (ValueError, TypeError):
-                    pass
-            return res
-        elif isinstance(data, (int, float)):
-            return [int(data)]
+                if x is not None:
+                    try:
+                        if not pd.isna(x):
+                            res.append(int(float(x)))
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+            return sorted(list(set(res)))
+        elif isinstance(data, (int, float, np.number)):
+            if not pd.isna(data) and not np.isnan(data):
+                return [int(data)]
     except Exception:
         pass
         
@@ -79,8 +100,9 @@ def parse_fornecedores_acesso(raw_val) -> list[int]:
     res = []
     for p in parts:
         try:
-            res.append(int(p))
-        except (ValueError, TypeError):
+            if p.lower() not in ["nan", "none", "null"]:
+                res.append(int(float(p)))
+        except (ValueError, TypeError, OverflowError):
             pass
     return sorted(list(set(res)))
 
@@ -102,17 +124,21 @@ def get_all_fornecedores_catalog(base_data_path: str = None) -> pd.DataFrame:
             
         df_forn = df[["COD_FORNECEDOR", "FORNECEDOR", "CODIGO_PRODUTO"]].dropna(subset=["COD_FORNECEDOR", "FORNECEDOR"]).copy()
         df_forn["cod_fornecedor"] = pd.to_numeric(df_forn["COD_FORNECEDOR"], errors="coerce").fillna(0).astype(int)
-        df_forn["nome_fornecedor"] = df_forn["FORNECEDOR"].astype(str).str.strip()
+        df_forn["nome_fornecedor"] = df_forn["FORNECEDOR"].fillna("SEM FORNECEDOR").astype(str).str.strip()
         
         # Filtra registros inválidos
         df_forn = df_forn[df_forn["cod_fornecedor"] > 0]
         
+        if df_forn.empty:
+            return pd.DataFrame(columns=["cod_fornecedor", "nome_fornecedor", "label", "total_skus"])
+        
         # Agrupa para obter o total de SKUs por fornecedor
         agrupado = df_forn.groupby(["cod_fornecedor", "nome_fornecedor"])["CODIGO_PRODUTO"].nunique().reset_index()
         agrupado.rename(columns={"CODIGO_PRODUTO": "total_skus"}, inplace=True)
+        agrupado["total_skus"] = pd.to_numeric(agrupado["total_skus"], errors="coerce").fillna(0).astype(int)
         
         agrupado["label"] = agrupado.apply(
-            lambda r: f"{r['cod_fornecedor']} - {r['nome_fornecedor']} ({r['total_skus']} SKUs)",
+            lambda r: f"{int(r['cod_fornecedor'])} - {r['nome_fornecedor']} ({int(r['total_skus'])} SKUs)",
             axis=1
         )
         agrupado.sort_values(by=["nome_fornecedor", "cod_fornecedor"], inplace=True)
@@ -127,7 +153,7 @@ def get_fornecedores_options_dict(base_data_path: str = None) -> dict[int, str]:
     df = get_all_fornecedores_catalog(base_data_path)
     if df.empty:
         return {}
-    return dict(zip(df["cod_fornecedor"], df["label"]))
+    return dict(zip(df["cod_fornecedor"].astype(int), df["label"]))
 
 
 def format_fornecedores_summary(codigos: list[int], catalog_df: pd.DataFrame = None, max_display: int = 3) -> str:
@@ -138,17 +164,28 @@ def format_fornecedores_summary(codigos: list[int], catalog_df: pd.DataFrame = N
     if catalog_df is None or catalog_df.empty:
         catalog_df = get_all_fornecedores_catalog()
         
-    cod_map = dict(zip(catalog_df["cod_fornecedor"], catalog_df["nome_fornecedor"]))
+    if catalog_df.empty:
+        return f"[{len(codigos)}] Códigos: {', '.join(str(c) for c in codigos[:max_display])}"
+        
+    cod_map = dict(zip(catalog_df["cod_fornecedor"].astype(int), catalog_df["nome_fornecedor"]))
     
     nomes = []
     for cod in codigos:
-        nome = cod_map.get(cod)
-        if nome:
-            nomes.append(f"{cod} - {nome}")
-        else:
+        if cod is None or pd.isna(cod):
+            continue
+        try:
+            cod_int = int(cod)
+            nome = cod_map.get(cod_int)
+            if nome:
+                nomes.append(f"{cod_int} - {nome}")
+            else:
+                nomes.append(str(cod_int))
+        except (ValueError, TypeError):
             nomes.append(str(cod))
             
     total = len(nomes)
+    if total == 0:
+        return "Nenhum fornecedor vinculado"
     if total <= max_display:
         return f"[{total}] " + ", ".join(nomes)
     else:
@@ -208,8 +245,19 @@ def load_produtos_para_fornecedor(
         df_filtrado = df_filtrado[df_filtrado["COD_FORNECEDOR"] == int(filtro_fornecedor_selecionado)]
     elif fornecedor_codes and len(fornecedor_codes) > 0:
         # 2. Usuário possui códigos de fornecedores explicitamente liberados
-        cods_set = set(int(c) for c in fornecedor_codes if int(c) > 0)
-        df_filtrado = df_filtrado[df_filtrado["COD_FORNECEDOR"].isin(cods_set)]
+        cods_validos = []
+        for c in fornecedor_codes:
+            if c is not None and not pd.isna(c):
+                try:
+                    c_int = int(c)
+                    if c_int > 0:
+                        cods_validos.append(c_int)
+                except (ValueError, TypeError):
+                    pass
+        if cods_validos:
+            df_filtrado = df_filtrado[df_filtrado["COD_FORNECEDOR"].isin(set(cods_validos))]
+        elif not is_admin:
+            return pd.DataFrame()
     elif empresa_fallback and str(empresa_fallback).strip().lower() not in ["administração", "administracao", "baklizi", "admin", ""]:
         # 3. Fallback para compatibilidade por nome/empresa
         emp_clean = str(empresa_fallback).strip()
