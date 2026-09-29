@@ -1,51 +1,51 @@
-# ProjetoBak - Versao 2.0.4
+# ProjetoBak - Versão 2.2.0
 
-Sistema de gestao de produtos, pedidos e usuarios com integracao Consinco.
+Sistema de gestão de produtos, pedidos, campanhas de exposição e integração com fornecedores e representantes (ERP Consinco).
 
 ## Estrutura do projeto
 
 ```
 ProjetoBak/
-├── app.py                   # Aplicacao principal (funcionarios)
-├── main.py                  # Menu principal e acesso fornecedor
-├── requirements.txt         # Dependencias Python
-├── README.md                # Documentacao principal
-├── ProjetoPY.code-workspace # Configuracao do workspace
+├── app.py                   # Aplicação principal (funcionários)
+├── main.py                  # Menu principal e acesso fornecedor/representante
+├── requirements.txt         # Dependências Python
+├── README.md                # Documentação principal
+├── ProjetoPY.code-workspace # Configuração do workspace
 │
-├── bdados/                  # Base de dados local
-│   └── con5cod.parquet       # Produtos Consinco (36k registros)
+├── bdados/                  # Base de dados analítica e cadastral
+│   ├── query.parquet         # Catálogo oficial Consinco (36k SKUs, estoques e lojas)
+│   ├── ean_dun.parquet       # Mapeamento oficial de código de barras / DUN
+│   └── con5cod.parquet       # Base de apoio Consinco
 │
-├── page/                    # Modulos de paginas
-│   ├── home.py               # Pagina inicial
-│   ├── pedido_cd.py          # Pedidos por codigo
+├── page/                    # Módulos de páginas
+│   ├── home.py               # Página inicial
+│   ├── pedido_cd.py          # Pedidos por código (CD15 / CD16)
 │   ├── pedido_consumo.py     # Pedidos de consumo
-│   ├── aprovacao_pedidos.py  # Aprovacao de pedidos (admin)
+│   ├── aprovacao_pedidos.py  # Aprovação de pedidos (admin)
+│   ├── campanhas_compras.py  # Gestão de campanhas (compras)
+│   ├── campanhas_supply.py   # Fechamento e cubagem de campanhas (supply)
+│   ├── campanhas_loja.py     # Visualização e checklists de campanhas por loja
 │   ├── admin_uploads.py      # Gerenciamento de uploads (admin)
-│   ├── admin_maint.py        # Administracao de usuarios
-│   ├── status_usuarios.py    # Status de usuarios online
-│   ├── contato.py            # Sistema de chamados
-│   ├── mudar_senha.py        # Alteracao de senha
-│   ├── area_fornecedor.py    # Area de fornecedores
-│   ├── admin_fornecedor.py   # Admin de fornecedores
-│   └── contato_fornecedor.py # Contato fornecedores
+│   ├── admin_maint.py        # Administração de usuários
+│   ├── status_usuarios.py    # Status de usuários online
+│   ├── area_fornecedor.py    # Área de digitação rápida para fornecedores/representantes
+│   ├── admin_fornecedor.py   # Gestão de carteiras e representantes de fornecedores
+│   └── mudar_senha.py        # Alteração de senha
 │
-├── scripts/                 # Scripts auxiliares
-│   └── smoke_test.py         # Testes automatizados
+├── services/                # Serviços de negócio e exportação
+│   ├── campanha_service.py   # Lógica e cálculos de campanhas
+│   ├── campanha_db.py        # Modelagem relacional de campanhas
+│   └── exportacao_campanha.py# Gerador de planilhas e relatórios PDF
 │
-├── tools/                   # Ferramentas de manutencao
-│   ├── cleanup_database_v2.py
-│   └── cleanup_pedidos_antigos.py
+├── utils/                   # Utilitários compartilhados
+│   ├── fornecedores_loader.py# Catálogo, estoques CD/loja e carteiras de fornecedores
+│   ├── timezone.py           # Relógio padrão de Brasília
+│   └── cargos.py             # Permissões e papéis de acesso
 │
-├── utils/                   # Utilitarios compartilhados
-│   └── timezone.py           # Relogio padrao de Brasilia
-│
-└── doc/                     # Documentacao completa
+└── doc/                     # Documentação completa
     ├── README_PRINCIPAL.md  # Este arquivo
-    ├── MIGRACAO_CONSINCO.md # Guia de migracao (legado)
-    ├── CHANGELOG.md         # Historico de versoes
-    ├── README_MIGRATIONS.md # Guia de migracoes (legado)
-    ├── GUIA_LIMPEZA_BD.md   # Limpeza do banco
-    └── COMO_OBTER_DATABASE_URL.md
+    ├── CHANGELOG.md         # Histórico completo de versões
+    └── plano_modulo_campanhas/# Especificações completas do módulo de campanhas
 ```
 
 ## Funcionalidades principais

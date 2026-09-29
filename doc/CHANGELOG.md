@@ -1,6 +1,34 @@
 # Histórico de Atualizações - ProjetoBak
 
-## 📅 24/09/2026 - Versão 2.1.0 - MÓDULO DE CAMPANHAS DE EXPOSIÇÃO E ABASTECIMENTO
+## 📅 29/09/2026 - Versão 2.2.0 - ATUALIZAÇÃO DO MÓDULO DE FORNECEDORES & REPRESENTANTES (QUERY.PARQUET)
+
+### 🏢 Integração Direta com `query.parquet` (Catálogo Oficial do ERP Consinco)
+- ✅ Desacoplamento definitivo da tabela legada `mix_produtos` e da coluna `origem`.
+- ✅ Criação do módulo centralizador [`utils/fornecedores_loader.py`](file:///c:/Users/usr/Downloads/Equipes_Agentes/Aplicativos/ProjetoBak_Sincronizador/utils/fornecedores_loader.py) com cache eficiente e tolerância total a tipos (`NaN`, `None`, delimitadores).
+- ✅ Leitura de fornecedores únicos (`COD_FORNECEDOR` e `FORNECEDOR`) diretamente do `query.parquet`.
+- ✅ Merge automático com `ean_dun.parquet` para exibição de código de barras.
+- ✅ Apuração em tempo real do **Estoque no CD15** (`estoque_cd`) e **Estoque na Loja Selecionada** (`estoque_loja`).
+- ✅ Priorização dinâmica de embalagem: `EMBL_TRANSFERENCIA` > `EMBL_COMPRA` > 1.
+- ✅ Indicador visual de **Última atualização dos estoques** no topo da capa com data e hora de modificação do `query.parquet` (fuso de Brasília).
+
+### 🎯 Gestão de Representantes Multi-Marcas — `page/admin_fornecedor.py`
+- ✅ Implementada gestão de representantes permitindo vincular múltiplas indústrias/códigos Consinco a um único login (ex: Nestlé + Oderich).
+- ✅ Seletor único em `st.multiselect` com busca instantânea por código ou nome do fornecedor e tags visíveis.
+- ✅ Nova aba de **Direcionamento Rápido de Carteira** com prévia interativa dos SKUs que o representante visualizará.
+- ✅ Tabela de **Usuários Cadastrados** atualizada com tags das indústrias vinculadas e remoção do campo de texto solto obsoleto "Empresa / Representação".
+- ✅ Permissões de acesso granulares por filial, restritas às **14 lojas padrão do Baklizi** (`001` a `008`, `011` a `014`, `017`, `018`).
+
+### ⚡ Grid de Digitação Rápida sem Delay / Lag — `page/area_fornecedor.py`
+- ✅ Eliminação total do delay/lag de digitação no `st.data_editor` através do encapsulamento em `st.form` (digitação 100% no cliente sem disparos de rerun a cada célula).
+- ✅ Seletor de quantidade de itens por página (20, 30, 50, 100, 200 itens) e salto direto para qualquer página.
+- ✅ Filtros combinados instantâneos por Código Interno, Descrição e EAN.
+- ✅ Sanitização de schema ao gravar pedidos na tabela `pedidos_consolidados`, prevenindo conflitos de colunas duplicadas (`embseparacao`) e case-sensitivity no PostgreSQL.
+
+### 🧹 Limpeza de Fluxos e Telas
+- ✅ Remoção da aba legada "Contato / Suporte" do menu de fornecedores.
+- ✅ Remoção do campo de texto opcional "Observações do Pedido" do fluxo de envio.
+
+---
 
 ### 🎯 Gestão de Campanhas (Compras) — `page/campanhas_compras.py`
 - ✅ Criação e edição de campanhas com gerador automático de código único (`CMP-YYYY-XXXXXX`) e status rastreável (`RASCUNHO`, `ATIVA`, `ENVIADA_SUPPLY`, `EM_AVALIACAO_SUPPLY`, `PENDENCIA_COMPRAS`, `FINALIZADA`, `INATIVA`).
