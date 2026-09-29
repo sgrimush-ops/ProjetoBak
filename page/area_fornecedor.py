@@ -173,7 +173,7 @@ def show_area_fornecedor(base_data_path: str = None):
     col_h1, col_h2 = st.columns([3, 1])
     with col_h1:
         st.info(
-            f"👤 **Usuário:** `{username}` | **Empresa / Representação:** `{empresa}`\n\n"
+            f"👤 **Usuário:** `{username}`\n\n"
             f"🏢 **Indústrias Vinculadas:** {resumo_fornecedores}"
         )
     with col_h2:
@@ -531,9 +531,8 @@ def show_area_fornecedor(base_data_path: str = None):
                         if motivo_pedido.strip():
                             assunto = f"Pedido Fornecedor - Loja {selected_loja}"
                             mensagem = (
-                                f"Pedido enviado pelo fornecedor/representante.\n\n"
-                                f"**Empresa:** {empresa}\n"
-                                f"**Usuário:** {username}\n"
+                                f"Pedido enviado pelo representante.\n\n"
+                                f"**Representante:** {username}\n"
                                 f"**Loja:** {selected_loja}\n"
                                 f"**Total de Itens:** {len(pedidos_finais)}\n\n"
                                 f"**Observações:**\n{motivo_pedido}"

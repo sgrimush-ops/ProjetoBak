@@ -81,7 +81,7 @@ def get_all_fornecedores_details(engine, base_data_path: str = None) -> pd.DataF
             )
         
         if df.empty:
-            return pd.DataFrame(columns=['Usuário', 'Empresa / Representação', 'Função', 'Lojas Permitidas', 'Fornecedores Autorizados', 'Status'])
+            return pd.DataFrame(columns=['Usuário', 'Função', 'Lojas Permitidas', 'Fornecedores Autorizados', 'Status'])
 
         catalog_df = get_all_fornecedores_catalog(base_data_path)
 
@@ -112,7 +112,6 @@ def get_all_fornecedores_details(engine, base_data_path: str = None) -> pd.DataF
         
         df_out = pd.DataFrame({
             'Usuário': df['username'].fillna("").astype(str),
-            'Empresa / Representação': df['empresa'].fillna("").astype(str),
             'Função': df['role'].fillna("fornecedor").astype(str),
             'Lojas Permitidas': df['lojas_fmt'],
             'Fornecedores Autorizados': df['forn_fmt'],
@@ -122,10 +121,10 @@ def get_all_fornecedores_details(engine, base_data_path: str = None) -> pd.DataF
         
     except Exception as e:
         st.error(f"Erro ao carregar fornecedores: {e}")
-        return pd.DataFrame(columns=['Usuário', 'Empresa / Representação', 'Função', 'Lojas Permitidas', 'Fornecedores Autorizados', 'Status'])
+        return pd.DataFrame(columns=['Usuário', 'Função', 'Lojas Permitidas', 'Fornecedores Autorizados', 'Status'])
 
 
-def add_new_fornecedor(engine, username, password, role, empresa, lojas_acesso_list, fornecedores_codigos):
+def add_new_fornecedor(engine, username, password, role, lojas_acesso_list, fornecedores_codigos):
     """Adiciona um novo fornecedor / representante ao DB."""
     try:
         hashed_password = make_hashes_fornecedor(password)
@@ -142,7 +141,7 @@ def add_new_fornecedor(engine, username, password, role, empresa, lojas_acesso_l
             "username": username.lower().strip(),
             "password": hashed_password,
             "role": role, 
-            "empresa": empresa.strip(),
+            "empresa": "",
             "lojas": lojas_acesso_json,
             "fornecedores": fornecedores_acesso_json,
             "status": 'DESLOGADO'
@@ -157,8 +156,8 @@ def add_new_fornecedor(engine, username, password, role, empresa, lojas_acesso_l
         return False
 
 
-def update_fornecedor_permissions(engine, username, role, empresa, lojas_acesso_list, fornecedores_codigos):
-    """Atualiza o role, empresa, lojas e fornecedores autorizados de um usuário."""
+def update_fornecedor_permissions(engine, username, role, lojas_acesso_list, fornecedores_codigos):
+    """Atualiza o role, lojas e fornecedores autorizados de um usuário."""
     try:
         lojas_acesso_json = json.dumps(lojas_acesso_list)
         fornecedores_acesso_json = json.dumps(parse_fornecedores_acesso(fornecedores_codigos))
@@ -166,14 +165,12 @@ def update_fornecedor_permissions(engine, username, role, empresa, lojas_acesso_
         query = text("""
             UPDATE fornecedores_users 
             SET role = :role, 
-                empresa = :empresa, 
                 lojas_acesso = :lojas,
                 fornecedores_acesso = :fornecedores
             WHERE username = :username
         """)
         params = {
             "role": role,
-            "empresa": empresa.strip(),
             "lojas": lojas_acesso_json,
             "fornecedores": fornecedores_acesso_json,
             "username": username.lower().strip()
@@ -221,7 +218,7 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
     """Interface do painel de administração de fornecedores e representantes."""
     st.title("🛡️ Gestão de Fornecedores & Representantes")
     st.markdown(
-        "Gerencie acessos de fornecedores e **representantes multi-marcas**, vinculando as indústrias autorizadas do `query.parquet`."
+        "Gerencie acessos de representantes vinculando diretamente as indústrias autorizadas do `query.parquet`."
     )
     
     # Garante que a tabela e os admins existam
@@ -265,15 +262,15 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
         st.caption("Digite o código ou nome da indústria no seletor abaixo para vincular os produtos ao representante.")
         
         with st.form("add_fornecedor_form", clear_on_submit=True):
-            col_a1, col_a2 = st.columns(2)
+            col_a1, col_a2, col_a3 = st.columns(3)
             with col_a1:
                 new_username = st.text_input("Login / Usuário (Username):", key="add_forn_user").lower().strip()
+            with col_a2:
                 new_password = st.text_input("Senha Inicial:", type="password", key="add_forn_pass")
+            with col_a3:
                 new_role = st.selectbox("Função (Role):", ROLES_FORNECEDOR, index=0, key="add_forn_role")
             
-            with col_a2:
-                new_empresa = st.text_input("Empresa / Nome do Representante:", placeholder="Ex: Representações Sul / Nestlé & Oderich", key="add_forn_empresa")
-                new_lojas = st.multiselect("Lojas Permitidas para Digitação:", LISTA_LOJAS_FORNECEDOR, default=LISTA_LOJAS_FORNECEDOR, key="add_forn_lojas")
+            new_lojas = st.multiselect("Lojas Permitidas para Digitação:", LISTA_LOJAS_FORNECEDOR, default=LISTA_LOJAS_FORNECEDOR, key="add_forn_lojas")
             
             st.markdown("#### 🏢 Fornecedores / Indústrias Autorizadas")
             new_fornecedores_sel = st.multiselect(
@@ -290,10 +287,10 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
             
             submit_add = st.form_submit_button("Criar Representante / Fornecedor", type="primary")
             if submit_add:
-                if not (new_username and new_password and new_empresa):
-                    st.warning("Preencha Login, Senha e Nome da Empresa / Representante.")
+                if not (new_username and new_password):
+                    st.warning("Preencha Login e Senha.")
                 else:
-                    if add_new_fornecedor(engine, new_username, new_password, new_role, new_empresa, new_lojas, todos_cods):
+                    if add_new_fornecedor(engine, new_username, new_password, new_role, new_lojas, todos_cods):
                         st.success(f"Fornecedor/Representante '{new_username}' criado com sucesso!")
                         st.rerun()
 
@@ -310,25 +307,23 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
                 # Busca dados brutos no DB
                 try:
                     with engine.connect() as conn:
-                        q = text("SELECT empresa, role, lojas_acesso, fornecedores_acesso FROM fornecedores_users WHERE username = :user")
+                        q = text("SELECT role, lojas_acesso, fornecedores_acesso FROM fornecedores_users WHERE username = :user")
                         row = conn.execute(q, {"user": user_to_manage.lower()}).fetchone()
                     
-                    current_empresa = row[0] if row and row[0] else ""
-                    current_role = row[1] if row and row[1] else "fornecedor"
-                    current_lojas_raw = row[2] if row and row[2] else "[]"
-                    current_forn_raw = row[3] if row and row[3] else "[]"
+                    current_role = row[0] if row and row[0] else "fornecedor"
+                    current_lojas_raw = row[1] if row and row[1] else "[]"
+                    current_forn_raw = row[2] if row and row[2] else "[]"
                     
                     current_lojas = json.loads(current_lojas_raw) if current_lojas_raw else []
                     current_cods = parse_fornecedores_acesso(current_forn_raw)
                 except Exception:
-                    current_empresa, current_role, current_lojas, current_cods = "", "fornecedor", [], []
+                    current_role, current_lojas, current_cods = "fornecedor", [], []
                 
                 with st.form("manage_fornecedor_form"):
                     st.markdown(f"### Editando: **{user_to_manage}**")
                     col_m1, col_m2 = st.columns(2)
                     with col_m1:
                         m_role = st.selectbox("Função (Role):", ROLES_FORNECEDOR, index=ROLES_FORNECEDOR.index(current_role) if current_role in ROLES_FORNECEDOR else 0)
-                        m_empresa = st.text_input("Empresa / Representação:", value=current_empresa)
                     with col_m2:
                         m_lojas = st.multiselect("Lojas Permitidas:", LISTA_LOJAS_FORNECEDOR, default=[l for l in current_lojas if l in LISTA_LOJAS_FORNECEDOR])
                     
@@ -354,7 +349,7 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
                             st.warning("⚠️ Nenhum fornecedor selecionado. O usuário não verá produtos até que seja vinculado.")
                     
                     if st.form_submit_button("Salvar Alterações de Acesso", type="primary"):
-                        if update_fornecedor_permissions(engine, user_to_manage, m_role, m_empresa, m_lojas, novos_cods_m):
+                        if update_fornecedor_permissions(engine, user_to_manage, m_role, m_lojas, novos_cods_m):
                             st.success(f"Permissões de '{user_to_manage}' atualizadas com sucesso!")
                             st.rerun()
 
@@ -381,16 +376,15 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
                 # Carrega fornecedores atuais
                 try:
                     with engine.connect() as conn:
-                        q = text("SELECT empresa, role, lojas_acesso, fornecedores_acesso FROM fornecedores_users WHERE username = :user")
+                        q = text("SELECT role, lojas_acesso, fornecedores_acesso FROM fornecedores_users WHERE username = :user")
                         row = conn.execute(q, {"user": rep_user.lower()}).fetchone()
-                    rep_empresa = row[0] if row and row[0] else ""
-                    rep_role = row[1] if row and row[1] else "fornecedor"
-                    rep_lojas = json.loads(row[2]) if row and row[2] else []
-                    rep_cods_atuais = parse_fornecedores_acesso(row[3] if row and row[3] else "[]")
+                    rep_role = row[0] if row and row[0] else "fornecedor"
+                    rep_lojas = json.loads(row[1]) if row and row[1] else []
+                    rep_cods_atuais = parse_fornecedores_acesso(row[2] if row and row[2] else "[]")
                 except Exception:
-                    rep_empresa, rep_role, rep_lojas, rep_cods_atuais = "", "fornecedor", [], []
+                    rep_role, rep_lojas, rep_cods_atuais = "fornecedor", [], []
 
-                st.markdown(f"Configurando fornecedores para: **{rep_user}** ({rep_empresa})")
+                st.markdown(f"Configurando fornecedores para: **{rep_user}**")
                 
                 selecionados_atuais_labels = [cod_to_label[c] for c in rep_cods_atuais if c in cod_to_label]
                 
@@ -430,7 +424,7 @@ def show_admin_fornecedor_page(engine, base_data_path: str = None):
                     
                 st.markdown("---")
                 if st.button("💾 Gravar e Atualizar Carteira do Representante", type="primary", use_container_width=True):
-                    if update_fornecedor_permissions(engine, rep_user, rep_role, rep_empresa, rep_lojas, codigos_finais_rep):
+                    if update_fornecedor_permissions(engine, rep_user, rep_role, rep_lojas, codigos_finais_rep):
                         st.success(f"Carteira de itens do representante '{rep_user}' gravada com sucesso!")
                         st.rerun()
 
