@@ -288,8 +288,36 @@ def load_produtos_para_fornecedor(
     if df_filtrado.empty:
         return pd.DataFrame()
         
-    # --- DEDUPLICAÇÃO DE PRODUTOS ---
-    df_produtos = df_filtrado.drop_duplicates(subset=["CODIGO_PRODUTO"]).copy()
+    # --- DEDUPLICAÇÃO E FILTRAGEM POR LOJA ---
+    # Se uma loja específica foi selecionada, exibe APENAS os itens cadastrados/ativos para essa loja no query.parquet
+    if codigo_loja and "CODIGO_EMPRESA" in df_filtrado.columns:
+        loja_limpa = str(codigo_loja).strip()
+        if loja_limpa.lower().startswith("loja_"):
+            loja_limpa = loja_limpa[5:]
+        
+        try:
+            loja_num = int(loja_limpa)
+            mask_loja = df_filtrado["CODIGO_EMPRESA"].astype(str).str.strip().isin([str(loja_num), f"{loja_num:03d}", loja_limpa])
+        except (ValueError, TypeError):
+            mask_loja = df_filtrado["CODIGO_EMPRESA"].astype(str).str.strip().str.upper() == loja_limpa.upper()
+            
+        df_loja_itens = df_filtrado[mask_loja].copy()
+        if df_loja_itens.empty:
+            return pd.DataFrame()
+            
+        df_produtos = df_loja_itens.drop_duplicates(subset=["CODIGO_PRODUTO"]).copy()
+        
+        # Apura estoque da loja selecionada
+        if "QUANTIDADE_DISPONIVEL" in df_loja_itens.columns:
+            df_loja_calc = df_loja_itens.groupby("CODIGO_PRODUTO")["QUANTIDADE_DISPONIVEL"].sum().reset_index()
+            df_loja_calc.rename(columns={"QUANTIDADE_DISPONIVEL": "estoque_loja"}, inplace=True)
+            df_produtos = df_produtos.merge(df_loja_calc, on="CODIGO_PRODUTO", how="left")
+            df_produtos["estoque_loja"] = pd.to_numeric(df_produtos["estoque_loja"], errors="coerce").fillna(0).astype(int)
+        else:
+            df_produtos["estoque_loja"] = 0
+    else:
+        df_produtos = df_filtrado.drop_duplicates(subset=["CODIGO_PRODUTO"]).copy()
+        df_produtos["estoque_loja"] = 0
     
     # --- APURAÇÃO DE ESTOQUE NO CD15 (CODIGO_EMPRESA == 15 ou 015) ---
     if "CODIGO_EMPRESA" in df_raw.columns and "QUANTIDADE_DISPONIVEL" in df_raw.columns:
@@ -300,25 +328,6 @@ def load_produtos_para_fornecedor(
         df_produtos["estoque_cd"] = pd.to_numeric(df_produtos["estoque_cd"], errors="coerce").fillna(0).astype(int)
     else:
         df_produtos["estoque_cd"] = 0
-
-    # --- APURAÇÃO DE ESTOQUE NA LOJA SELECIONADA ---
-    if codigo_loja and "CODIGO_EMPRESA" in df_raw.columns and "QUANTIDADE_DISPONIVEL" in df_raw.columns:
-        loja_limpa = str(codigo_loja).strip()
-        if loja_limpa.lower().startswith("loja_"):
-            loja_limpa = loja_limpa[5:]
-        
-        try:
-            loja_num = int(loja_limpa)
-            mask_loja = df_raw["CODIGO_EMPRESA"].astype(str).str.strip().isin([str(loja_num), f"{loja_num:03d}", loja_limpa])
-        except (ValueError, TypeError):
-            mask_loja = df_raw["CODIGO_EMPRESA"].astype(str).str.strip().str.upper() == loja_limpa.upper()
-            
-        df_loja_calc = df_raw[mask_loja].groupby("CODIGO_PRODUTO")["QUANTIDADE_DISPONIVEL"].sum().reset_index()
-        df_loja_calc.rename(columns={"QUANTIDADE_DISPONIVEL": "estoque_loja"}, inplace=True)
-        df_produtos = df_produtos.merge(df_loja_calc, on="CODIGO_PRODUTO", how="left")
-        df_produtos["estoque_loja"] = pd.to_numeric(df_produtos["estoque_loja"], errors="coerce").fillna(0).astype(int)
-    else:
-        df_produtos["estoque_loja"] = 0
         
     # --- EMBALAGEM ---
     # Prioridade: EMBL_TRANSFERENCIA > EMBL_COMPRA > 1

@@ -76,6 +76,8 @@ def main() -> int:
             "page.__init__",
             "page.home",
             "page.pedido_cd",
+            "page.pedido_consumo",
+            "page.lista_consumo",
             "page.aprovacao_pedidos",
             "page.status_usuarios",
             "page.campanhas_compras",

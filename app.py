@@ -20,6 +20,7 @@ from page.contato import show_contato_page
 from page.admin_uploads import show_admin_uploads_page
 from page.pedido_cd import show_pedidos_cd_page
 from page.pedido_consumo import show_pedido_consumo_page
+from page.lista_consumo import show_lista_consumo_page
 from page.solicitacao_acesso import show_solicitacao_acesso_page
 from page.campanhas_compras import show_campanhas_compras_page
 from page.campanhas_supply import show_campanhas_supply_page
@@ -521,14 +522,21 @@ def main_app():
         "Solicitar Acesso": lambda: show_solicitacao_acesso_page(engine, BASE_DATA_PATH),
     }
 
-    if st.session_state.get("lojas_acesso"):
+    is_admin_user = (st.session_state.get("role") == "admin")
+    is_consumo_cd_user = is_user_consumo_cd(engine)
+
+    if st.session_state.get("lojas_acesso") or is_admin_user or is_consumo_cd_user:
         # Adiciona as páginas de pedido
         paginas["Pedido de Consumo"] = lambda: show_pedido_consumo_page(
             engine, BASE_DATA_PATH)
         paginas["Pedido por Código (CD)"] = lambda: show_pedidos_cd_page(
             engine, BASE_DATA_PATH)
 
-    if st.session_state.get("role") == "admin" or is_user_consumo_cd(engine):
+    # Catálogo e Manutenção de Itens de Consumo (visível para todos)
+    paginas["Lista Consumo"] = lambda: show_lista_consumo_page(
+        engine, BASE_DATA_PATH)
+
+    if is_admin_user or is_consumo_cd_user:
         paginas["Aprovação de Pedidos"] = lambda: show_aprovacao_page(
             engine, BASE_DATA_PATH)
 
