@@ -1,5 +1,26 @@
 # Histórico de Atualizações - ProjetoBak
 
+## 📅 30/09/2026 - Versão 2.3.0 - FILTRAGEM POR LOJA DO FORNECEDOR & GESTÃO/EXPORTAÇÃO DE ITENS DE CONSUMO
+
+### 🏪 Filtragem Estrita de Produtos por Filial no Catálogo de Fornecedores (`query.parquet`)
+- ✅ **Isolamento de Itens Ativos por Loja:** Ajustado [`utils/fornecedores_loader.py`](file:///c:/Users/usr/Downloads/Equipes_Agentes/Aplicativos/ProjetoBak_Sincronizador/utils/fornecedores_loader.py) para filtrar estritamente as linhas onde `CODIGO_EMPRESA == loja_selecionada` antes de deduplicar.
+- ✅ **Eliminação de Itens Inativos Zerados:** Produtos pertencentes ao fornecedor mas sem cadastro na filial selecionada deixaram de poluir a tela com estoque 0.
+- ✅ **Preservação de Itens Ativos com Saldo 0:** Produtos ativos na filial permanecem visíveis mesmo com estoque local zerado, garantindo apuração do estoque no CD15 para reposição.
+
+### ⚙️ Gestão de Itens no Banco de Dados (CD & Consumo) — `page/pedido_consumo.py`
+- ✅ **Inclusão com Validação Rígida Antiduplicidade:** Formulário obrigatório de inclusão (`código`, `descrição`, `embalagem`) que bloqueia códigos repetidos na tabela `consumo`.
+- ✅ **Sincronização Contínua:** Mutação atômica no PostgreSQL com exportação de contingência para `bdados/consumo.parquet` e persistência na tabela `arquivos_sync`.
+- ✅ **Disponibilidade Imediata:** Novos produtos ficam instantaneamente acessíveis para digitação de pedidos de todas as lojas.
+- ✅ **Exclusão de Produtos:** Exclusão em lote diretamente via grid interativo com sincronização automática da base.
+
+### 📋 Nova Página "Lista Consumo" no Menu Lateral & Exportações
+- ✅ **Acesso no Menu Lateral:** Nova página [`page/lista_consumo.py`](file:///c:/Users/usr/Downloads/Equipes_Agentes/Aplicativos/ProjetoBak_Sincronizador/page/lista_consumo.py) adicionada ao menu de navegação de todos os usuários logados.
+- ✅ **Modo de Consulta Seguro para Lojas:** Usuários comuns acessam em modo somente leitura para pesquisa rápida.
+- ✅ **Motor de Exportação Excel (`.xlsx`):** Download da lista formatada com auto-ajuste de largura de colunas.
+- ✅ **Motor de Exportação PDF (`.pdf`):** Geração de documento A4 via `ReportLab` com repetição de cabeçalho em todas as páginas (`repeatRows=1`), data/hora de emissão e linhas alternadas zebra para conferência física.
+
+---
+
 ## 📅 29/09/2026 - Versão 2.2.0 - ATUALIZAÇÃO DO MÓDULO DE FORNECEDORES & REPRESENTANTES (QUERY.PARQUET)
 
 ### 🏢 Integração Direta com `query.parquet` (Catálogo Oficial do ERP Consinco)
