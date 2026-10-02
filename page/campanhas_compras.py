@@ -564,16 +564,17 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
         itens_campanha = obter_itens_campanha_com_detalhes(engine, camp_id)
 
         # Seção para Adicionar / Buscar Novo Produto no Parquet
-        with st.expander("🔍 Adicionar Novo Produto ao Mix (Busca por Código, Descrição ou Família)", expanded=(len(itens_campanha) == 0)):
+        session_mix_key = f"mix_selecionado_camp_{camp_id}"
+
+        with st.expander("🔍 Adicionar Novo Produto ao Mix (Busca por Código, Descrição ou Família)", expanded=(len(itens_campanha) == 0 or session_mix_key in st.session_state)):
             col_b1, col_b2 = st.columns([3, 1])
             termo_busca = col_b1.text_input(
                 "Digite o Código Consinco, Descrição ou Família do Produto:",
                 key="busca_prod_termo",
-                placeholder="Ex: Tang, Coca Cola, Sabão Omo, 3, 26, Arroz..."
+                placeholder="Ex: Tang, Capsula Dolce Gusto, Coca Cola, Sabão Omo, 38902, 26..."
             )
 
             # Sugestão de produtos
-            produto_encontrado_cod = None
             if termo_busca and termo_busca.strip():
                 parquet_path = "bdados/query.parquet"
                 import os
@@ -602,79 +603,96 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                         match_df = df_p_uniq[filtro].head(40)
                         if not match_df.empty:
                             col_b2.caption(f"🎯 **{len(match_df)} produto(s)** encontrados")
-                            opcoes_dict = {}
-                            for _, row in match_df.iterrows():
-                                p_cod = int(row['CODIGO_PRODUTO'])
-                                desc = row['DESCRICAO_PRODUTO']
-                                forn = row.get('FORNECEDOR') or row.get('COMPRADOR') or 'GERAL'
-                                fam_cod = row.get('CODIGO_FAMILIA')
-                                fam_tag = f" [👨‍👩‍👧‍👦 Família {int(fam_cod)}]" if pd.notna(fam_cod) and int(fam_cod) > 0 else ""
-                                label = f"{p_cod} — {desc}{fam_tag} [{forn}]"
-                                opcoes_dict[label] = p_cod
-                            
-                            sel_label = st.selectbox("Selecione o Produto para Configurar Mix e Exposição:", list(opcoes_dict.keys()), key="sel_prod_busca_box")
-                            produto_encontrado_cod = opcoes_dict[sel_label]
+
+                            with st.form(key=f"form_selecao_mix_multi_{camp_id}", clear_on_submit=False):
+                                st.markdown("##### 📋 Selecione os produtos para agrupar na mesma exposição:")
+                                st.info("💡 **Marcação sem recarregamento:** Marque todas as famílias e sabores que você deseja juntar na **mesma estrutura/ponta física**. Você pode marcar múltiplos itens livremente. Ao finalizar, clique no botão **🎯 Gravar Seleção de Produtos** abaixo.")
+
+                                col_m1, col_m2 = st.columns(2)
+                                metade_m = (len(match_df) + 1) // 2
+                                chk_map = {}
+
+                                for idx_m, (_, row_m) in enumerate(match_df.iterrows()):
+                                    target_col = col_m1 if idx_m < metade_m else col_m2
+                                    p_cod = int(row_m['CODIGO_PRODUTO'])
+                                    desc = str(row_m['DESCRICAO_PRODUTO']).strip()
+                                    forn = str(row_m.get('FORNECEDOR') or row_m.get('COMPRADOR') or 'GERAL').strip()
+                                    fam_cod = row_m.get('CODIGO_FAMILIA')
+                                    fam_desc = str(row_m.get('DESCRICAO_FAMILIA') or '').strip() if pd.notna(row_m.get('DESCRICAO_FAMILIA')) else ''
+                                    
+                                    fam_tag = f"[👨‍👩‍👧‍👦 Família {int(fam_cod)} - {fam_desc}]" if pd.notna(fam_cod) and int(fam_cod) > 0 else "[Sem Família]"
+                                    
+                                    with target_col:
+                                        with st.container(border=True):
+                                            chk_val = st.checkbox(
+                                                f"**{p_cod}** — {desc}",
+                                                key=f"chk_item_mix_{camp_id}_{p_cod}",
+                                                help=f"{fam_tag} | Fornecedor: {forn}"
+                                            )
+                                            st.caption(f"🏷️ {fam_tag} | 🏢 {forn}")
+                                            chk_map[p_cod] = chk_val
+
+                                btn_gravar_selecao = st.form_submit_button(
+                                    "🎯 Gravar Seleção de Produtos para Configurar Exposição",
+                                    type="primary",
+                                    use_container_width=True
+                                )
+
+                                if btn_gravar_selecao:
+                                    skus_marcados = [pc for pc, is_chk in chk_map.items() if is_chk]
+                                    if not skus_marcados:
+                                        st.warning("⚠️ Marque ao menos um produto no box de seleção acima.")
+                                    else:
+                                        st.session_state[session_mix_key] = skus_marcados
+                                        st.success(f"✅ {len(skus_marcados)} produto(s) selecionado(s) com sucesso!")
+                                        st.rerun()
+
                         else:
                             st.warning(f"Nenhum produto localizado com o termo '{termo_busca}'. Tente buscar por palavras parciais ou outro código.")
                     except Exception as e:
                         st.error(f"Erro ao buscar no catálogo: {e}")
 
-            if produto_encontrado_cod:
-                prod_data = carregar_dados_produto_consolidado(
-                    engine=engine,
-                    produto_codigo=produto_encontrado_cod,
-                    data_inicio=camp["data_inicio"],
-                    data_fim=camp["data_fim"],
-                    base_data_path=base_data_path
-                )
+            # Painel de Configuração dos SKUs Selecionados
+            skus_selecionados_atual = st.session_state.get(session_mix_key, [])
+            if skus_selecionados_atual:
+                prods_data_list = []
+                for sc in skus_selecionados_atual:
+                    p_info = carregar_dados_produto_consolidado(
+                        engine=engine,
+                        produto_codigo=sc,
+                        data_inicio=camp["data_inicio"],
+                        data_fim=camp["data_fim"],
+                        base_data_path=base_data_path
+                    )
+                    prods_data_list.append(p_info)
 
-                # Card Resumo do Produto (Embalagens Somente Leitura)
                 st.markdown("---")
-                st.markdown(f"#### Detalhes do Produto: `{prod_data['produto_codigo']}` — **{prod_data['descricao']}**")
-                st.caption(f"🏢 **Fornecedor:** {prod_data.get('fornecedor') or 'GERAL'} | 🏷️ **Departamento:** {prod_data.get('departamento') or 'N/D'} | 👤 **Comprador:** {prod_data.get('comprador') or 'N/D'}")
-                
-                c_m1, c_m2, c_m3, c_m4 = st.columns(4)
-                c_m1.metric("Estoque Total Lojas", f"{prod_data['estoque_total_lojas']:,.0f} un")
-                c_m2.metric("Estoque Disponível CD15", f"{prod_data['estoque_cd15']:,.0f} un")
-                c_m3.metric("Venda Média Diária", f"{prod_data['venda_media_diaria_total']:.1f} un/dia")
-                c_m4.metric(f"Venda Projetada ({dias_camp} dias)", f"{prod_data['venda_projetada_total']:.0f} un")
+                col_mix_head, col_mix_btn = st.columns([3, 1])
+                col_mix_head.markdown(f"#### 📦 Exposição Conjunta: {len(prods_data_list)} SKUs Selecionados")
+                with col_mix_btn:
+                    if st.button("🗑️ Limpar Seleção", key=f"btn_limpar_sel_{camp_id}", type="secondary"):
+                        del st.session_state[session_mix_key]
+                        st.rerun()
 
-                # Exibição informativa das embalagens (Somente Leitura para Comprador)
-                col_e1, col_e2 = st.columns(2)
-                col_e1.info(f"📦 **Embalagem de Compra:** `{prod_data['embalagem_compra']}` un/cx *(Fixo do Cadastro ERP)*")
-                col_e2.info(f"🚚 **Embalagem de Transferência:** `{prod_data['embalagem_transferencia']}` un/cx *(Fixo do Cadastro ERP)*")
+                st.info(f"💡 **Rateio Proporcional no Supply:** Estes **{len(prods_data_list)} SKUs** compartilharão a mesma estrutura física de exposição (Ponta / Ilha). O Supply dividirá a capacidade do móvel proporcionalmente entre eles ({len(prods_data_list)} sabores).")
 
-                # Bloco de Família de Produtos (Seleção de Sabores / SKUs irmãos)
-                skus_familia = prod_data.get("skus_familia", [])
-                skus_selecionados_familia = []
+                # Lista resumida dos SKUs selecionados
+                with st.container(border=True):
+                    st.markdown("##### 🛒 Produtos do Mix Selecionado:")
+                    for p in prods_data_list:
+                        fam_str = f" [👨‍👩‍👧‍👦 Família {p['codigo_familia']} - {p.get('descricao_familia', '')}]" if p.get('codigo_familia') else ""
+                        st.write(f"• `{p['produto_codigo']}` — **{p['descricao']}**{fam_str} | Estoque CD15: **{p['estoque_cd15']:,.0f} un** | Venda Proj: **{p['venda_projetada_total']:.0f} un**")
 
-                if prod_data.get("codigo_familia") and len(skus_familia) > 1:
-                    st.markdown("---")
-                    with st.container(border=True):
-                        st.markdown(f"#### 👨‍👩‍👧‍👦 Família de Produtos: `{prod_data['codigo_familia']}` — **{prod_data.get('descricao_familia', prod_data['descricao'])}**")
-                        st.info(f"💡 **Rateio Proporcional de Exposição:** Este produto pertence a uma família com **{len(skus_familia)} SKUs/sabores**. Selecione os sabores que irão participar da mesma estrutura (Ilha / Ponta) nas lojas. O Supply dividirá a capacidade física proporcionalmente entre os SKUs selecionados.")
-
-                        col_fams = st.columns(3)
-                        for idx_f, sku_f in enumerate(skus_familia):
-                            c_idx = idx_f % 3
-                            with col_fams[c_idx]:
-                                is_curr = sku_f["produto_codigo"] == prod_data["produto_codigo"]
-                                padrao_chk = is_curr or sku_f.get("is_selecionado_padrao", True)
-                                st_tag = f"({sku_f['status_compra']})" if sku_f.get("status_compra") else ""
-                                
-                                chk = st.checkbox(
-                                    f"`{sku_f['produto_codigo']}` — {sku_f['descricao']} {st_tag}",
-                                    value=padrao_chk,
-                                    key=f"chk_fam_{prod_data['codigo_familia']}_{sku_f['produto_codigo']}"
-                                )
-                                if chk:
-                                    skus_selecionados_familia.append(sku_f)
-
-                        st.success(f"📌 **{len(skus_selecionados_familia)} de {len(skus_familia)} SKUs selecionados** para rateio conjunto da exposição.")
+                    # Métricas agregadas do grupo
+                    c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+                    c_m1.metric("Total SKUs no Móvel", f"{len(prods_data_list)} SKUs")
+                    c_m2.metric("Estoque Total Lojas", f"{sum(p['estoque_total_lojas'] for p in prods_data_list):,.0f} un")
+                    c_m3.metric("Estoque Disponível CD15", f"{sum(p['estoque_cd15'] for p in prods_data_list):,.0f} un")
+                    c_m4.metric(f"Venda Projetada ({dias_camp} dias)", f"{sum(p['venda_projetada_total'] for p in prods_data_list):,.0f} un")
 
                 # Grid de Lojas para Compras com Padrão INATIVA
-                st.markdown("##### 🏪 Definição de Exposição e Participação por Loja")
-                st.info("💡 **Regra de Participação:** Todas as lojas iniciam com **INATIVA** (sem ponto extra e sem oferta). Selecione o tipo de exposição (ex: `ILHA`, `PONTA DE GÔNDOLA`) apenas nas lojas que participarão da campanha.")
+                st.markdown("##### 🏪 Definição de Exposição e Participação por Loja (Aplicada ao Grupo)")
+                st.info("💡 **Regra de Participação:** Selecione o tipo de exposição apenas nas lojas que participarão da campanha. A configuração será aplicada a todos os SKUs do grupo.")
 
                 lojas_inputs = []
                 col_g1, col_g2 = st.columns(2)
@@ -685,18 +703,19 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                     with container_col:
                         with st.container(border=True):
                             lj_nome = lojas_map.get(lj_cod, f"Loja {lj_cod}")
-                            lj_detalhe = prod_data["lojas_detalhe"].get(lj_cod, {})
-                            st_lj = lj_detalhe.get("estoque_loja", 0.0)
-                            vp_lj = lj_detalhe.get("venda_projetada", 0.0)
+                            
+                            # Soma dados dos produtos para esta loja
+                            st_lj_total = sum(p["lojas_detalhe"].get(lj_cod, {}).get("estoque_loja", 0.0) for p in prods_data_list)
+                            vp_lj_total = sum(p["lojas_detalhe"].get(lj_cod, {}).get("venda_projetada", 0.0) for p in prods_data_list)
                             
                             st.write(f"🏬 **{lj_cod} - {lj_nome}**")
-                            st.caption(f"Estoque Atual: **{st_lj:,.0f} un** | Venda Proj: **{vp_lj:.0f} un**")
+                            st.caption(f"Estoque Total Mix: **{st_lj_total:,.0f} un** | Venda Proj Mix: **{vp_lj_total:.0f} un**")
                             
                             tipo_sel = st.selectbox(
                                 "Tipo de Exposição:",
                                 options=lista_nomes_tipos,
                                 index=idx_inativa_padrao,
-                                key=f"tipo_exp_{prod_data['produto_codigo']}_{lj_cod}"
+                                key=f"tipo_exp_mix_{camp_id}_{lj_cod}"
                             )
                             
                             is_inativa = tipo_sel.upper() == "INATIVA"
@@ -706,91 +725,41 @@ def show_campanhas_compras_page(engine, base_data_path: str = "data"):
                             else:
                                 st.success(f"✅ **Ativa:** Exposição em `{tipo_sel}`")
                                 vol_sug = st.number_input(
-                                    "Sugestão Comprador (Unidades):",
+                                    "Sugestão Comprador (Unidades por SKU):",
                                     min_value=0,
                                     value=0,
                                     step=1,
-                                    key=f"vol_sug_{prod_data['produto_codigo']}_{lj_cod}",
-                                    help="Deixe 0 se desejar que o Supply calcule o volume com base na capacidade física da bandeja."
+                                    key=f"vol_sug_mix_{camp_id}_{lj_cod}",
+                                    help="Volume sugerido por SKU. Deixe 0 para cálculo automático de capacidade física pelo Supply."
                                 )
 
                             lojas_inputs.append({
                                 "loja_codigo": lj_cod,
                                 "tipo_exposicao_id": mapa_tipos_exp[tipo_sel],
                                 "volume_comprador": vol_sug,
-                                "estoque_loja": st_lj,
-                                "estoque_cd": prod_data["estoque_cd15"],
-                                "venda_media": lj_detalhe.get("venda_media", 0.0),
-                                "venda_projetada": vp_lj
+                                "estrutura_exposicao_id": None
                             })
 
-                # Botões de Salvamento (Família em Lote vs SKU Individual)
+                # Botão de Salvamento Final
                 st.markdown("---")
-                if len(skus_selecionados_familia) > 1:
-                    col_sav1, col_sav2 = st.columns([3, 2])
-                    with col_sav1:
-                        if st.button(f"💾 Salvar Família ({len(skus_selecionados_familia)} SKUs) e Matriz de Lojas", type="primary", key="btn_salvar_familia_lote"):
-                            suc, msg = salvar_familia_campanha_compras(
-                                engine=engine,
-                                campanha_id=camp_id,
-                                produtos_familia=skus_selecionados_familia,
-                                dados_lojas=lojas_inputs,
-                                usuario=usuario_atual,
-                                data_inicio=camp["data_inicio"],
-                                data_fim=camp["data_fim"],
-                                base_data_path=base_data_path
-                            )
-                            if suc:
-                                st.success(msg)
-                                st.rerun()
-                            else:
-                                st.error(msg)
-                    with col_sav2:
-                        if st.button(f"💾 Salvar Apenas SKU `{prod_data['produto_codigo']}` Isolado", type="secondary", key="btn_salvar_prod_isolado"):
-                            suc, msg = salvar_item_campanha_compras(
-                                engine=engine,
-                                campanha_id=camp_id,
-                                produto_codigo=prod_data["produto_codigo"],
-                                descricao=prod_data["descricao"],
-                                embalagem_compra=prod_data["embalagem_compra"],
-                                embalagem_transferencia=prod_data["embalagem_transferencia"],
-                                dados_lojas=lojas_inputs,
-                                usuario=usuario_atual,
-                                fornecedor=prod_data.get("fornecedor"),
-                                departamento=prod_data.get("departamento"),
-                                comprador=prod_data.get("comprador"),
-                                codigo_familia=prod_data.get("codigo_familia"),
-                                descricao_familia=prod_data.get("descricao_familia"),
-                                total_skus_familia=1
-                            )
-                            if suc:
-                                st.success(msg)
-                                st.rerun()
-                            else:
-                                st.error(msg)
-                else:
-                    if st.button("💾 Salvar Produto e Matriz de Lojas na Campanha", type="primary", key="btn_salvar_prod_matriz"):
-                        suc, msg = salvar_item_campanha_compras(
-                            engine=engine,
-                            campanha_id=camp_id,
-                            produto_codigo=prod_data["produto_codigo"],
-                            descricao=prod_data["descricao"],
-                            embalagem_compra=prod_data["embalagem_compra"],
-                            embalagem_transferencia=prod_data["embalagem_transferencia"],
-                            dados_lojas=lojas_inputs,
-                            usuario=usuario_atual,
-                            fornecedor=prod_data.get("fornecedor"),
-                            departamento=prod_data.get("departamento"),
-                            comprador=prod_data.get("comprador"),
-                            codigo_familia=prod_data.get("codigo_familia"),
-                            descricao_familia=prod_data.get("descricao_familia"),
-                            total_skus_familia=1
-                        )
-                        if suc:
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
+                if st.button(f"💾 Salvar {len(prods_data_list)} Produtos e Matriz de Lojas na Campanha", type="primary", key=f"btn_salvar_mix_lote_{camp_id}", use_container_width=True):
+                    suc, msg = salvar_familia_campanha_compras(
+                        engine=engine,
+                        campanha_id=camp_id,
+                        produtos_familia=[{"produto_codigo": p["produto_codigo"], "descricao": p["descricao"]} for p in prods_data_list],
+                        dados_lojas=lojas_inputs,
+                        usuario=usuario_atual,
+                        data_inicio=camp["data_inicio"],
+                        data_fim=camp["data_fim"],
+                        base_data_path=base_data_path
+                    )
+                    if suc:
+                        if session_mix_key in st.session_state:
+                            del st.session_state[session_mix_key]
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
 
         # Exibição dos Itens Já Cadastrados com Ordenação por Fornecedor
         if not itens_campanha:
